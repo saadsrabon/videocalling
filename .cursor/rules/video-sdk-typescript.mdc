@@ -1,0 +1,35 @@
+---
+description: TypeScript module patterns for video-sdk-service
+globs: src/**/*.ts
+alwaysApply: false
+---
+
+# TypeScript module patterns
+
+## File naming
+
+- `*.adapter.ts` — pluggable implementations (auth, storage)
+- `*.plugin.ts` — Fastify plugins only
+- `*.types.ts` — interfaces and domain types, no runtime logic
+- `room-store.ts`, `*-service.ts` — business logic
+
+## Imports
+
+- Domain modules (`rooms/`, `auth/`) must not import from `routes/` or `plugins/`
+- Use explicit types; avoid `any`
+- ESM: use `.js` extension in relative imports when targeting `dist/` (NodeNext)
+
+## Fastify
+
+- Register routes via async plugins, not inline in `index.ts` (after step 0.4)
+- Use `fastify-plugin` when a plugin must share decorators (auth)
+
+## Example adapter shape
+
+```typescript
+export interface AuthAdapter {
+  authenticate(credentials: AuthCredentials): Promise<AuthUser>;
+}
+```
+
+Swap implementation in bootstrap — never branch JWT vs session inside a route.

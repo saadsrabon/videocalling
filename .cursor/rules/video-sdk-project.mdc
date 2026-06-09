@@ -1,0 +1,47 @@
+---
+description: Video SDK microservice — project context, modular rules, learning workflow
+alwaysApply: true
+---
+
+# Video SDK Service
+
+Read `PLAN.md` first for the atomic step list and current progress.
+
+## What we are building
+
+- **Microservice:** Fastify + TypeScript, raw WebRTC (no LiveKit/Twilio/media SaaS)
+- **Auth:** Pluggable `AuthAdapter` (JWT first; session/external auth later)
+- **NAT:** Public STUN initially; TURN self-hosted on VPS (coturn) in Phase 5
+- **Workflow:** One atomic step per request — only files listed for that step
+
+## Modular / decoupled rules
+
+```
+routes/     → thin HTTP; delegate to services
+auth/       → interface + adapters only; no imports from signaling/rooms
+rooms/      → domain + store interface; no Fastify types in core
+signaling/  → WS handlers; blind relay SDP/ICE; reuse AuthAdapter
+config/     → env + ICE; no business logic
+index.ts    → bootstrap/wiring only
+```
+
+- Prefer **interfaces** over concrete classes for anything swappable (auth, room store).
+- **No business logic** in route handlers or `index.ts`.
+- Do not skip steps in `PLAN.md`; mark completed steps `[x]` when done.
+
+## Teaching format (required on every step)
+
+When implementing or explaining a step, always include:
+
+1. **Why** — what problem this step solves
+2. **Tradeoffs** — chosen approach vs alternatives (table OK)
+3. **How** — files touched, what each does, how to verify
+
+User is **learning by building** — prefer minimal diffs, no ahead-of-plan features.
+
+## Code conventions
+
+- TypeScript strict, ESM (`"type": "module"`)
+- Node >= 20
+- Match existing file layout under `src/`
+- No commits unless user asks

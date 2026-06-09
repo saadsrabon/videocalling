@@ -1,22 +1,15 @@
 import Fastify from "fastify";
-
-const PORT = Number(process.env.PORT) || 3000;
-const HOST = process.env.HOST || "0.0.0.0";
+import { config } from "./config/env.js";
+import { healthRoutes } from "./routes/health.js";
 
 const app = Fastify({
   logger: true,
 });
 
-app.get("/health", async () => {
-  return {
-    status: "ok",
-    service: "video-sdk-service",
-  };
-});
-
 async function start() {
   try {
-    await app.listen({ port: PORT, host: HOST });
+    await app.register(healthRoutes);
+    await app.listen({ port: config.port, host: config.host });
   } catch (error) {
     app.log.error(error);
     process.exit(1);
