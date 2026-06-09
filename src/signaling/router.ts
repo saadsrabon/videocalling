@@ -1,0 +1,47 @@
+import type { SignalingContext } from "./handlers/join.js";
+import { handleIceCandidate } from "./handlers/ice-candidate.js";
+import { handleJoin } from "./handlers/join.js";
+import { handleAnswer, handleOffer } from "./handlers/sdp.js";
+import {
+  SIGNALING_VERSION,
+  parseClientMessage,
+  sendMessage,
+} from "./message-types.js";
+
+export function routeSignalingMessage(
+  ctx: SignalingContext,
+  raw: string,
+): void {
+  try {
+    const message = parseClientMessage(raw);
+
+    switch (message.type) {
+      case "join":
+        handleJoin(ctx, message);
+        break;
+      case "offer":
+        handleOffer(ctx, message);
+        break;
+      case "answer":
+        handleAnswer(ctx, message);
+        break;
+      case "ice-candidate":
+        handleIceCandidate(ctx, message);
+        break;
+      default:
+        sendMessage(ctx.send, {
+          type: "error",
+          code: "unknown_type",
+          message: "Unsupported message type",
+          v: SIGNALING_VERSION,
+        });
+    }
+  } catch {
+    sendMessage(ctx.send, {
+      type: "error",
+      code: "invalid_message",
+      message: "Message must be valid JSON signaling payload",
+      v: SIGNALING_VERSION,
+    });
+  }
+}

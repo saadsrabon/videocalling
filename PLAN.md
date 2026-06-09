@@ -60,11 +60,11 @@ src/
 | Phase | Status |
 |-------|--------|
 | 0 — Foundation | ✅ Complete |
-| 1 — Pluggable auth | ⬜ Not started |
-| 2 — ICE / STUN | ⬜ Not started |
-| 3 — Rooms | ⬜ Not started |
-| 4 — Signaling (WebSocket) | ⬜ Not started |
-| 5 — TURN (VPS / coturn) | ⬜ Not started |
+| 1 — Pluggable auth | ✅ Complete |
+| 2 — ICE / STUN | ✅ Complete |
+| 3 — Rooms | ✅ Complete |
+| 4 — Signaling (WebSocket) | ✅ Complete |
+| 5 — TURN (VPS / coturn) | ⏸ Skipped for now |
 | 6 — Browser SDK | ⬜ Not started |
 
 ---
@@ -144,7 +144,7 @@ src/
 
 ## Phase 1 — Pluggable auth
 
-### Step 1.1 — Auth adapter interface ⬜
+### Step 1.1 — Auth adapter interface ✅
 
 **Files:** `src/auth/types.ts`, `src/auth/auth-adapter.interface.ts`
 
@@ -162,7 +162,7 @@ src/
 
 ---
 
-### Step 1.2 — JWT auth adapter ⬜
+### Step 1.2 — JWT auth adapter ✅
 
 **Files:** `src/auth/jwt-auth.adapter.ts`, update `.env.example`
 
@@ -180,7 +180,7 @@ src/
 
 ---
 
-### Step 1.3 — Auth Fastify plugin ⬜
+### Step 1.3 — Auth Fastify plugin ✅
 
 **Files:** `src/plugins/auth.plugin.ts`
 
@@ -198,7 +198,7 @@ src/
 
 ---
 
-### Step 1.4 — Session adapter stub ⬜
+### Step 1.4 — Session adapter stub ✅
 
 **Files:** `src/auth/session-auth.adapter.ts`
 
@@ -218,7 +218,7 @@ src/
 
 ## Phase 2 — ICE / STUN
 
-### Step 2.1 — ICE config module ⬜
+### Step 2.1 — ICE config module ✅
 
 **Files:** `src/config/ice.ts`, update `.env.example`
 
@@ -236,7 +236,7 @@ src/
 
 ---
 
-### Step 2.2 — ICE servers endpoint ⬜
+### Step 2.2 — ICE servers endpoint ✅
 
 **Files:** `src/routes/ice-servers.ts`
 
@@ -256,7 +256,7 @@ src/
 
 ## Phase 3 — Rooms
 
-### Step 3.1 — Room model + store ⬜
+### Step 3.1 — Room model + store ✅
 
 **Files:** `src/rooms/types.ts`, `src/rooms/room-store.ts`
 
@@ -274,7 +274,7 @@ src/
 
 ---
 
-### Step 3.2 — Room REST API ⬜
+### Step 3.2 — Room REST API ✅
 
 **Files:** `src/routes/rooms.ts`
 
@@ -294,7 +294,7 @@ src/
 
 ## Phase 4 — Signaling (WebSocket)
 
-### Step 4.1 — WebSocket plugin ⬜
+### Step 4.1 — WebSocket plugin ✅
 
 **Files:** `src/plugins/websocket.plugin.ts`, `@fastify/websocket`
 
@@ -312,7 +312,7 @@ src/
 
 ---
 
-### Step 4.2 — Auth on WS connect ⬜
+### Step 4.2 — Auth on WS connect ✅
 
 **Files:** `src/signaling/auth.ts`
 
@@ -330,7 +330,7 @@ src/
 
 ---
 
-### Step 4.3 — Join room via WS ⬜
+### Step 4.3 — Join room via WS ✅
 
 **Files:** `src/signaling/handlers/join.ts`, `src/signaling/message-types.ts`
 
@@ -348,7 +348,7 @@ src/
 
 ---
 
-### Step 4.4 — Relay SDP offer/answer ⬜
+### Step 4.4 — Relay SDP offer/answer ✅
 
 **Files:** `src/signaling/handlers/sdp.ts`
 
@@ -366,7 +366,7 @@ src/
 
 ---
 
-### Step 4.5 — Relay ICE candidates ⬜
+### Step 4.5 — Relay ICE candidates ✅
 
 **Files:** `src/signaling/handlers/ice-candidate.ts`
 
@@ -470,6 +470,8 @@ npm run typecheck  # TypeScript without emit
 
 ## Next step
 
-**→ Step 1.1 — Auth adapter interface** (`src/auth/types.ts`)
+**→ Phase 5 (TURN)** — skipped for now per project decision.
 
-Ask: *"next"* or *"do step 1.1"*
+**→ Step 6.1 — Browser client SDK** (`packages/client-sdk/`) when ready.
+
+Ask: *"do step 6.1"* or *"setup turn later"*
