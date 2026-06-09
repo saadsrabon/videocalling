@@ -65,7 +65,7 @@ src/
 | 3 — Rooms | ✅ Complete |
 | 4 — Signaling (WebSocket) | ✅ Complete |
 | 5 — TURN (VPS / coturn) | ⏸ Skipped for now |
-| 6 — Browser SDK | ⬜ Not started |
+| 6 — Browser SDK | ✅ Complete |
 
 ---
 
@@ -425,7 +425,7 @@ src/
 
 ## Phase 6 — Browser SDK (later)
 
-### Step 6.1 — Minimal client wrapper ⬜
+### Step 6.1 — Minimal client wrapper ✅
 
 **Files:** `packages/client-sdk/` (separate package)
 
@@ -470,8 +470,6 @@ npm run typecheck  # TypeScript without emit
 
 ## Next step
 
-**→ Phase 5 (TURN)** — skipped for now per project decision.
+**→ Phase 5 (TURN)** — when you need calls behind strict NAT/corporate networks.
 
-**→ Step 6.1 — Browser client SDK** (`packages/client-sdk/`) when ready.
-
-Ask: *"do step 6.1"* or *"setup turn later"*
+Ask: *"setup turn"* when ready.

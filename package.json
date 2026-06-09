@@ -7,9 +7,18 @@
   "author": "Saad Srabon",
   "scripts": {
     "dev": "tsx watch src/index.ts",
+    "dev:lan": "cross-env HOST=0.0.0.0 tsx watch src/index.ts",
+    "dev:lan:https": "npm run cert && cross-env HOST=0.0.0.0 USE_HTTPS=true tsx watch src/index.ts",
     "build": "tsc",
+    "build:sdk": "npm run build --prefix packages/client-sdk",
+    "build:all": "npm run build && npm run build:sdk",
     "start": "node dist/index.js",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "typecheck:all": "npm run typecheck && npm run typecheck --prefix packages/client-sdk",
+    "demo": "npm run build:sdk && npx --yes serve . -l tcp://0.0.0.0:5000",
+    "demo:https": "npm run build:sdk && npm run cert && npx --yes serve . -l tcp://0.0.0.0:5000 --ssl-cert certs/dev-cert.pem --ssl-key certs/dev-key.pem",
+    "cert": "node scripts/generate-dev-cert.mjs 192.168.1.142",
+    "token": "node --import tsx/esm scripts/generate-token.mjs"
   },
   "engines": {
     "node": ">=20"
@@ -17,6 +26,7 @@
   "license": "UNLICENSED",
   "private": true,
   "dependencies": {
+    "@fastify/cors": "^11.2.0",
     "@fastify/websocket": "^11.2.0",
     "dotenv": "^17.4.2",
     "fastify": "^5.8.5",
@@ -27,6 +37,8 @@
     "@types/jsonwebtoken": "^9.0.10",
     "@types/node": "^25.9.2",
     "@types/ws": "^8.18.1",
+    "cross-env": "^10.1.0",
+    "selfsigned": "^5.5.0",
     "tsx": "^4.22.4",
     "typescript": "^6.0.3"
   }

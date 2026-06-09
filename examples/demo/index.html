@@ -1,0 +1,158 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Video SDK Demo</title>
+    <style>
+      :root {
+        color-scheme: dark;
+        font-family: system-ui, sans-serif;
+      }
+
+      body {
+        margin: 0;
+        padding: 24px;
+        background: #0f1115;
+        color: #f5f5f5;
+      }
+
+      .grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+        gap: 16px;
+        margin-top: 16px;
+      }
+
+      .controls {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        margin-top: 8px;
+      }
+
+      .controls button {
+        width: auto;
+        flex: 1 1 140px;
+        margin-top: 0;
+      }
+
+      video {
+        width: 100%;
+        background: #111;
+        border-radius: 12px;
+        aspect-ratio: 16 / 9;
+      }
+
+      input,
+      button,
+      textarea {
+        width: 100%;
+        box-sizing: border-box;
+        margin-top: 8px;
+        padding: 10px;
+        border-radius: 8px;
+        border: 1px solid #333;
+        background: #171a21;
+        color: inherit;
+      }
+
+      button {
+        cursor: pointer;
+      }
+
+      button:disabled {
+        opacity: 0.5;
+        cursor: not-allowed;
+      }
+
+      .hint {
+        color: #aab;
+        font-size: 0.95rem;
+        line-height: 1.5;
+      }
+
+      pre {
+        background: #171a21;
+        padding: 12px;
+        border-radius: 8px;
+        overflow: auto;
+        min-height: 120px;
+      }
+
+      #shareLink {
+        font-size: 0.85rem;
+        word-break: break-all;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>Video SDK Demo</h1>
+    <p class="hint">
+      <strong>Same Wi‑Fi:</strong> Browsers block camera/mic on plain HTTP except
+      localhost. Use HTTPS for staff on other PCs:
+      <code>pnpm dev:lan:https</code> + <code>npm run demo:https</code>, then
+      open <code>https://YOUR_LAN_IP:5000/examples/demo/</code> and accept the
+      certificate warning once on each device.
+    </p>
+
+    <label>
+      Server URL
+      <input id="serverUrl" value="https://127.0.0.1:3004" />
+    </label>
+    <button type="button" id="useWifiServerBtn">Use Wi‑Fi server URL (this PC)</button>
+
+    <label>
+      JWT token
+      <textarea
+        id="token"
+        rows="3"
+        placeholder="Click Get token below, or paste a JWT (one line)"
+      ></textarea>
+    </label>
+
+    <label>
+      Room ID (leave empty to create)
+      <input id="roomId" placeholder="Optional room UUID" />
+    </label>
+
+    <div class="controls">
+      <button type="button" id="tokenUserABtn">Get token (user-a)</button>
+      <button type="button" id="tokenUserBBtn">Get token (user-b)</button>
+      <button type="button" id="tokenUserCBtn">Get token (user-c)</button>
+    </div>
+
+    <div class="controls">
+      <button type="button" id="connectBtn">Connect</button>
+      <button type="button" id="hangupBtn" disabled>Hang up</button>
+      <button type="button" id="copyShareBtn" disabled>Copy share link</button>
+    </div>
+
+    <label>
+      Share link (send to staff on same Wi‑Fi)
+      <input id="shareLink" readonly placeholder="Connect or enter room ID first" />
+    </label>
+
+    <div class="grid">
+      <div>
+        <h2>Local</h2>
+        <video id="localVideo" autoplay playsinline muted></video>
+        <div class="controls">
+          <button type="button" id="muteMicBtn" disabled>Mute mic</button>
+        </div>
+      </div>
+      <div>
+        <h2>Remote</h2>
+        <video id="remoteVideo" autoplay playsinline></video>
+        <div class="controls">
+          <button type="button" id="muteRemoteBtn" disabled>Mute remote audio</button>
+        </div>
+      </div>
+    </div>
+
+    <h2>Log</h2>
+    <pre id="log"></pre>
+
+    <script type="module" src="./app.js"></script>
+  </body>
+</html>

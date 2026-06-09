@@ -13,6 +13,9 @@ export interface AppConfig {
   authServiceUrl: string;
   sessionCookieName: string;
   stunUrls: string[];
+  useHttps: boolean;
+  sslKeyPath: string;
+  sslCertPath: string;
 }
 
 function parsePort(value: string | undefined): number {
@@ -128,6 +131,18 @@ function parseStunUrls(value: string | undefined): string[] {
   return urls;
 }
 
+function parseBoolean(value: string | undefined): boolean {
+  return value === "true" || value === "1";
+}
+
+function parsePath(value: string | undefined, fallback: string): string {
+  if (value === undefined || value.trim() === "") {
+    return fallback;
+  }
+
+  return value.trim();
+}
+
 /** Loaded once at startup — import this instead of reading process.env elsewhere. */
 const nodeEnv = parseNodeEnv(process.env.NODE_ENV);
 const authMode = parseAuthMode(process.env.AUTH_MODE);
@@ -141,4 +156,7 @@ export const config: AppConfig = {
   authServiceUrl: parseAuthServiceUrl(process.env.AUTH_SERVICE_URL, authMode),
   sessionCookieName: parseSessionCookieName(process.env.SESSION_COOKIE_NAME),
   stunUrls: parseStunUrls(process.env.STUN_URLS),
+  useHttps: parseBoolean(process.env.USE_HTTPS),
+  sslKeyPath: parsePath(process.env.SSL_KEY_PATH, "certs/dev-key.pem"),
+  sslCertPath: parsePath(process.env.SSL_CERT_PATH, "certs/dev-cert.pem"),
 };
