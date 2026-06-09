@@ -3,7 +3,7 @@ import Fastify from "fastify";
 import cors from "@fastify/cors";
 import { createAuthAdapter } from "./auth/create-auth-adapter.js";
 import { config } from "./config/env.js";
-import { buildIceConfig } from "./config/ice.js";
+import { buildClientIceConfig } from "./config/ice-service.js";
 import { authPlugin } from "./plugins/auth.plugin.js";
 import { roomsPlugin } from "./plugins/rooms.plugin.js";
 import { signalingPlugin } from "./plugins/signaling.plugin.js";
@@ -33,7 +33,10 @@ async function start() {
       await app.register(cors, { origin: true });
       await app.register(devTokenRoutes);
       app.log.info(
-        { ice: buildIceConfig(config.stunUrls) },
+        {
+          ice: buildClientIceConfig(config),
+          turnEnabled: config.turnUrls.length > 0,
+        },
         "ICE config loaded",
       );
     }

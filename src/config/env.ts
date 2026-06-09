@@ -13,6 +13,9 @@ export interface AppConfig {
   authServiceUrl: string;
   sessionCookieName: string;
   stunUrls: string[];
+  turnUrls: string[];
+  turnSecret: string | null;
+  turnCredentialTtlSeconds: number;
   useHttps: boolean;
   sslKeyPath: string;
   sslCertPath: string;
@@ -131,6 +134,67 @@ function parseStunUrls(value: string | undefined): string[] {
   return urls;
 }
 
+function parseTurnUrls(value: string | undefined): string[] {
+  if (value === undefined || value.trim() === "") {
+    return [];
+  }
+
+  const urls = value
+    .split(",")
+    .map((url) => url.trim())
+    .filter((url) => url.length > 0);
+
+  for (const url of urls) {
+    if (
+      !url.startsWith("turn:") &&
+      !url.startsWith("turns:") &&
+      !url.startsWith("turn://") &&
+      !url.startsWith("turns://")
+    ) {
+      throw new Error(
+        `Invalid TURN URL: "${url}". Must start with turn: or turns:`,
+      );
+    }
+  }
+
+  return urls;
+}
+
+function parseTurnSecret(
+  value: string | undefined,
+  turnUrls: string[],
+): string | null {
+  if (turnUrls.length === 0) {
+    return null;
+  }
+
+  if (value === undefined || value.trim() === "") {
+    throw new Error("TURN_SECRET is required when TURN_URL is set");
+  }
+
+  if (value.length < 16) {
+    throw new Error("TURN_SECRET must be at least 16 characters");
+  }
+
+  return value;
+}
+
+function parseTurnCredentialTtlSeconds(value: string | undefined): number {
+  if (value === undefined || value.trim() === "") {
+    return 3600;
+  }
+
+  const ttl = Number(value);
+
+  if (!Number.isInteger(ttl) || ttl < 60 || ttl > 86400) {
+    throw new Error(
+      "TURN_CREDENTIAL_TTL_SECONDS must be an integer between 60 and 86400",
+    );
+  }
+
+  return ttl;
+}
+
 function parseBoolean(value: string | undefined): boolean {
   return value === "true" || value === "1";
 }
@@ -146,6 +210,7 @@ function parsePath(value: string | undefined, fallback: string): string {
 /** Loaded once at startup — import this instead of reading process.env elsewhere. */
 const nodeEnv = parseNodeEnv(process.env.NODE_ENV);
 const authMode = parseAuthMode(process.env.AUTH_MODE);
+const turnUrls = parseTurnUrls(process.env.TURN_URL);
 
 export const config: AppConfig = {
   port: parsePort(process.env.PORT),
@@ -156,6 +221,11 @@ export const config: AppConfig = {
   authServiceUrl: parseAuthServiceUrl(process.env.AUTH_SERVICE_URL, authMode),
   sessionCookieName: parseSessionCookieName(process.env.SESSION_COOKIE_NAME),
   stunUrls: parseStunUrls(process.env.STUN_URLS),
+  turnUrls,
+  turnSecret: parseTurnSecret(process.env.TURN_SECRET, turnUrls),
+  turnCredentialTtlSeconds: parseTurnCredentialTtlSeconds(
+    process.env.TURN_CREDENTIAL_TTL_SECONDS,
+  ),
   useHttps: parseBoolean(process.env.USE_HTTPS),
   sslKeyPath: parsePath(process.env.SSL_KEY_PATH, "certs/dev-key.pem"),
   sslCertPath: parsePath(process.env.SSL_CERT_PATH, "certs/dev-cert.pem"),

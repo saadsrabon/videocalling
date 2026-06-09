@@ -64,7 +64,7 @@ src/
 | 2 — ICE / STUN | ✅ Complete |
 | 3 — Rooms | ✅ Complete |
 | 4 — Signaling (WebSocket) | ✅ Complete |
-| 5 — TURN (VPS / coturn) | ⏸ Skipped for now |
+| 5 — TURN (VPS / coturn) | ✅ Complete |
 | 6 — Browser SDK | ✅ Complete |
 
 ---
@@ -386,7 +386,7 @@ src/
 
 ## Phase 5 — TURN (VPS / coturn)
 
-### Step 5.1 — TURN credential generation ⬜
+### Step 5.1 — TURN credential generation ✅
 
 **Files:** `src/turn/credentials.ts`, update `src/routes/ice-servers.ts`, `.env.example`
 
@@ -405,7 +405,7 @@ src/
 
 ---
 
-### Step 5.2 — coturn VPS setup ⬜
+### Step 5.2 — coturn VPS setup ✅
 
 **Files:** `docs/coturn-vps.md` (ops doc, not runtime code)
 
@@ -470,6 +470,6 @@ npm run typecheck  # TypeScript without emit
 
 ## Next step
 
-**→ Phase 5 (TURN)** — when you need calls behind strict NAT/corporate networks.
+All planned phases complete. For production: deploy API + coturn VPS, replace dev HTTPS certs, and wire real auth service.
 
-Ask: *"setup turn"* when ready.
+See `docs/coturn-vps.md` to finish TURN on your VPS.

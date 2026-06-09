@@ -1,6 +1,6 @@
 import type { FastifyPluginAsync } from "fastify";
 import fp from "fastify-plugin";
-import { buildIceConfig } from "../config/ice.js";
+import { buildClientIceConfig } from "../config/ice-service.js";
 import { config } from "../config/env.js";
 import { requireAuth } from "../plugins/auth.plugin.js";
 
@@ -10,8 +10,8 @@ const plugin: FastifyPluginAsync = async (app) => {
     {
       preHandler: requireAuth,
     },
-    async () => {
-      return buildIceConfig(config.stunUrls);
+    async (request) => {
+      return buildClientIceConfig(config, request.user.userId);
     },
   );
 };
