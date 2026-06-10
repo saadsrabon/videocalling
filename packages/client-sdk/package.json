@@ -16,5 +16,8 @@
     "typecheck": "tsc --noEmit"
   },
   "license": "UNLICENSED",
-  "private": true
+  "private": true,
+  "dependencies": {
+    "mediasoup-client": "^3.20.0"
+  }
 }

@@ -2,7 +2,7 @@
 
 > How to connect **any frontend** (React, Vue, Angular, plain HTML, mobile WebView) to the Video SDK backend.
 >
-> **Last updated:** 2026-06-09 · **API version:** `v1` · **Signaling version:** `1`
+> **Last updated:** 2026-06-10 · **API version:** `v1` · **Signaling version:** `1`
 
 ---
 
@@ -23,9 +23,11 @@ Use this table to jump to a section. **When you add a backend or SDK feature, ad
 | Mute mic / remote audio | ✅ | [SDK controls](#sdk-controls) |
 | Share link (host → guest) | ✅ | [Host and guest flow](#host-and-guest-flow) |
 | Staff call invite / accept | ✅ | [Staff calling](#staff-calling-simfree-admin) |
+| SFU group meetings (up to 6) | ✅ | [Group meetings (SFU)](#group-meetings-sfu) |
+| Meeting links + guest join | ✅ | [Group meetings (SFU)](#group-meetings-sfu) |
+| Screen share (meetings) | ✅ | [Group meetings (SFU)](#group-meetings-sfu) |
+| Virtual backgrounds (client) | ✅ | [Virtual backgrounds](#virtual-backgrounds) |
 | Dev token endpoint | ✅ (dev only) | [Development helpers](#development-helpers) |
-| Group calls (3+ peers) | ❌ | — |
-| Screen share | ❌ | — |
 | Recording | ❌ | — |
 
 ---
@@ -553,6 +555,108 @@ pnpm token user-b
 | `docs/coturn-vps.md` | TURN server setup on VPS |
 | `PLAN.md` | Backend build plan and phase tracker |
 | `examples/demo/` | Reference frontend implementation |
+
+---
+
+## Group meetings (SFU)
+
+**Added:** 2026-06-10 · **Status:** ✅
+
+### Why
+
+1:1 staff calls stay **P2P mesh**. Group meetings use an embedded **mediasoup SFU** so each participant sends one upstream and receives N downstream streams (up to **6 peers** on a small VPS).
+
+### Create a meeting (staff JWT)
+
+```http
+POST /v1/meetings
+Authorization: Bearer <staff-jwt>
+Content-Type: application/json
+
+{ "title": "Team standup" }
+```
+
+Response:
+
+```json
+{
+  "roomId": "uuid",
+  "code": "AB12CD34",
+  "joinUrl": "https://admin.simfree.io/meet/AB12CD34",
+  "maxParticipants": 6
+}
+```
+
+Set `MEETING_BASE_URL` on the server so `joinUrl` matches your frontend.
+
+### Guest join (no account)
+
+```http
+POST /v1/meetings/:code/guest-token
+Content-Type: application/json
+
+{ "name": "Alex Guest" }
+```
+
+Returns `{ token, userId, roomId, code, expiresIn }`. Guest JWT includes `role: "guest"` and `roomId` — they can only join that room.
+
+Then:
+
+```http
+POST /v1/meetings/:code/guest-join
+Authorization: Bearer <guest-token>
+```
+
+### SDK — `MeetingClient`
+
+```javascript
+import { MeetingClient } from "@video-sdk/client";
+
+// Staff (already has video JWT from your auth API)
+const client = await MeetingClient.join({
+  serverUrl: "https://admin.simfree.io/video-api",
+  token: staffJwt,
+  code: "AB12CD34",
+});
+
+client.on((event) => {
+  if (event.type === "track-added") {
+    // event.peerId, event.kind, event.source ("camera" | "screen"), event.stream
+  }
+});
+
+await client.startScreenShare();
+await client.stopScreenShare();
+await client.leave();
+```
+
+Signaling uses `sfu.*` messages over the same WebSocket (`sfu.getRtpCapabilities`, `sfu.createTransport`, `sfu.produce`, `sfu.consume`, …). Media RTP goes **directly to the VPS** on `MEDIASOUP_PORT` (default **40000** UDP/TCP), not through nginx/Cloudflare.
+
+### Env vars (server)
+
+| Variable | Description |
+|----------|-------------|
+| `MEDIASOUP_ANNOUNCED_IP` | VPS public IP (required in production) |
+| `MEDIASOUP_PORT` | WebRTC listen port (default 40000) |
+| `SFU_MAX_PEERS` | Max participants per meeting (default 6) |
+| `MEETING_BASE_URL` | Prefix for `joinUrl` in create response |
+| `GUEST_JWT_TTL_SECONDS` | Guest token lifetime |
+
+---
+
+## Virtual backgrounds
+
+**Added:** 2026-06-10 · **Status:** ✅ (client-only)
+
+### Why
+
+Replace or blur the camera background before sending video to the SFU. The server never sees segmentation — only the processed video track.
+
+### Simfree admin
+
+See `apps/admin/src/lib/virtual-background.ts` and `MeetingRoom` controls. Uses `@mediapipe/tasks-vision` selfie segmentation + canvas compositing, then `MeetingClient.setVideoSource(processedTrack)`.
+
+Modes: **none**, **blur**, **bundled gradient images**, or custom image URL.
 
 ---
 

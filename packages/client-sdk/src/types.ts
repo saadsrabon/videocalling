@@ -76,3 +76,63 @@ export type VideoClientEvent =
   | { type: "error"; message: string };
 
 export type VideoClientEventHandler = (event: VideoClientEvent) => void;
+
+export interface MeetingCreateResponse {
+  roomId: string;
+  code: string;
+  createdAt: string;
+  title?: string;
+  joinUrl: string;
+  maxParticipants: number;
+}
+
+export interface MeetingJoinResponse {
+  roomId: string;
+  mode: "p2p" | "sfu";
+  code?: string;
+  participants: string[];
+  alreadyJoined: boolean;
+}
+
+export interface GuestTokenResponse {
+  token: string;
+  userId: string;
+  roomId: string;
+  code: string;
+  expiresIn: number;
+}
+
+export interface MeetingClientJoinOptions {
+  serverUrl: string;
+  token: string;
+  /** Meeting join code */
+  code: string;
+  displayName?: string;
+}
+
+export type MediaSource = "camera" | "screen";
+
+export type MeetingClientEvent =
+  | { type: "connected"; userId: string }
+  | { type: "joined"; roomId: string; participants: string[] }
+  | { type: "peer-joined"; userId: string }
+  | { type: "peer-left"; userId: string }
+  | {
+      type: "track-added";
+      peerId: string;
+      kind: "audio" | "video";
+      source: MediaSource;
+      track: MediaStreamTrack;
+      stream: MediaStream;
+    }
+  | {
+      type: "track-removed";
+      peerId: string;
+      producerId: string;
+      source?: MediaSource;
+    }
+  | { type: "screen-share-started" }
+  | { type: "screen-share-stopped" }
+  | { type: "error"; message: string };
+
+export type MeetingClientEventHandler = (event: MeetingClientEvent) => void;

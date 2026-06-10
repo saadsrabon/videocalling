@@ -19,6 +19,11 @@ export interface AppConfig {
   useHttps: boolean;
   sslKeyPath: string;
   sslCertPath: string;
+  mediasoupAnnouncedIp: string;
+  mediasoupPort: number;
+  sfuMaxPeers: number;
+  meetingBaseUrl: string;
+  guestJwtTtlSeconds: number;
 }
 
 function parsePort(value: string | undefined): number {
@@ -207,6 +212,47 @@ function parsePath(value: string | undefined, fallback: string): string {
   return value.trim();
 }
 
+function parsePositiveInt(
+  value: string | undefined,
+  fallback: number,
+  name: string,
+): number {
+  if (value === undefined || value.trim() === "") {
+    return fallback;
+  }
+
+  const parsed = Number(value);
+
+  if (!Number.isInteger(parsed) || parsed < 1) {
+    throw new Error(`${name} must be a positive integer`);
+  }
+
+  return parsed;
+}
+
+function parseMediasoupAnnouncedIp(
+  value: string | undefined,
+  nodeEnv: NodeEnv,
+): string {
+  if (value === undefined || value.trim() === "") {
+    if (nodeEnv === "production") {
+      throw new Error("MEDIASOUP_ANNOUNCED_IP is required in production");
+    }
+
+    return "127.0.0.1";
+  }
+
+  return value.trim();
+}
+
+function parseMeetingBaseUrl(value: string | undefined): string {
+  if (value === undefined || value.trim() === "") {
+    return "http://localhost:3002/meet";
+  }
+
+  return value.trim().replace(/\/$/, "");
+}
+
 /** Loaded once at startup — import this instead of reading process.env elsewhere. */
 const nodeEnv = parseNodeEnv(process.env.NODE_ENV);
 const authMode = parseAuthMode(process.env.AUTH_MODE);
@@ -229,4 +275,20 @@ export const config: AppConfig = {
   useHttps: parseBoolean(process.env.USE_HTTPS),
   sslKeyPath: parsePath(process.env.SSL_KEY_PATH, "certs/dev-key.pem"),
   sslCertPath: parsePath(process.env.SSL_CERT_PATH, "certs/dev-cert.pem"),
+  mediasoupAnnouncedIp: parseMediasoupAnnouncedIp(
+    process.env.MEDIASOUP_ANNOUNCED_IP,
+    nodeEnv,
+  ),
+  mediasoupPort: parsePositiveInt(
+    process.env.MEDIASOUP_PORT,
+    40000,
+    "MEDIASOUP_PORT",
+  ),
+  sfuMaxPeers: parsePositiveInt(process.env.SFU_MAX_PEERS, 6, "SFU_MAX_PEERS"),
+  meetingBaseUrl: parseMeetingBaseUrl(process.env.MEETING_BASE_URL),
+  guestJwtTtlSeconds: parsePositiveInt(
+    process.env.GUEST_JWT_TTL_SECONDS,
+    3600,
+    "GUEST_JWT_TTL_SECONDS",
+  ),
 };

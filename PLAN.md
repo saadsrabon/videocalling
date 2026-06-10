@@ -66,6 +66,7 @@ src/
 | 4 — Signaling (WebSocket) | ✅ Complete |
 | 5 — TURN (VPS / coturn) | ✅ Complete |
 | 6 — Browser SDK | ✅ Complete |
+| 7 — SFU meetings | ✅ Complete |
 
 **Frontend docs:** [`docs/frontend-integration.md`](docs/frontend-integration.md) — update when adding user-facing API/SDK features.
 
@@ -447,6 +448,56 @@ src/
 
 ---
 
+## Phase 7 — SFU group meetings
+
+### Step 7.1 — mediasoup SFU core ✅
+
+**Files:** `src/sfu/*`, `src/plugins/sfu.plugin.ts`, `src/signaling/handlers/sfu.ts`, `src/signaling/message-types.ts`
+
+**Why:** P2P mesh does not scale beyond 1:1; SFU forwards RTP server-side.
+
+**Verify:** `npm run typecheck` · two clients join same meeting code and exchange audio/video.
+
+---
+
+### Step 7.2 — Meeting links + guest tokens ✅
+
+**Files:** `src/routes/meetings.ts`, `src/rooms/*`, `src/config/env.ts`
+
+**Why:** Shareable short codes; guests join without staff accounts.
+
+**Verify:** `POST /v1/meetings` → `POST /v1/meetings/:code/guest-token` → guest WS join.
+
+---
+
+### Step 7.3 — MeetingClient SDK ✅
+
+**Files:** `packages/client-sdk/src/meeting-client.ts`, sync to `@simfree/video-client`
+
+**Why:** Apps should not hand-roll mediasoup signaling.
+
+**Verify:** `npm run typecheck:all` · Simfree admin `/meet/[code]`.
+
+---
+
+### Step 7.4 — Screen share + virtual backgrounds ✅
+
+**Files:** `MeetingClient.startScreenShare`, `apps/admin` meeting UI + `virtual-background.ts`
+
+**Verify:** Share screen in meeting; toggle blur/image background.
+
+---
+
+### Step 7.5 — VPS deploy ✅
+
+**Files:** `deploy/setup-server.sh`, `.env.example` (`MEDIASOUP_*`, `MEETING_BASE_URL`)
+
+**Why:** SFU media requires UDP/TCP on `MEDIASOUP_PORT` with public `MEDIASOUP_ANNOUNCED_IP`.
+
+**Verify:** Open firewall port · `curl /health` · join meeting on production admin URL.
+
+---
+
 ## Environment variables (living list)
 
 | Variable | Phase | Description |
@@ -458,6 +509,11 @@ src/
 | `STUN_URLS` | 2 | Comma-separated STUN URLs |
 | `TURN_URL` | 5 | turn:your-vps:3478 |
 | `TURN_SECRET` | 5 | Shared secret with coturn |
+| `MEDIASOUP_ANNOUNCED_IP` | 7 | Public IP for SFU WebRTC |
+| `MEDIASOUP_PORT` | 7 | SFU listen port (default 40000) |
+| `SFU_MAX_PEERS` | 7 | Max meeting participants |
+| `MEETING_BASE_URL` | 7 | Frontend base for join links |
+| `GUEST_JWT_TTL_SECONDS` | 7 | Guest token TTL |
 
 ---
 
@@ -474,6 +530,6 @@ npm run typecheck  # TypeScript without emit
 
 ## Next step
 
-All planned phases complete. For production: deploy API + coturn VPS, replace dev HTTPS certs, and wire real auth service.
+Phases 0–7 complete. For production: deploy API + coturn + mediasoup SFU on VPS, set `MEDIASOUP_ANNOUNCED_IP`, and rebuild Simfree admin with `@simfree/video-client`.
 
 See `docs/coturn-vps.md` to finish TURN on your VPS.

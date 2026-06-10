@@ -8,6 +8,8 @@ REPO_URL="${REPO_URL:-https://github.com/saadsrabon/videocalling.git}"
 JWT_SECRET="${JWT_SECRET:-prod-video-jwt-secret-simfree-2026-min-32-chars}"
 TURN_SECRET="${TURN_SECRET:-a4e94a0073cd55d7e6644820ce013bfc376ea5ce6d6e03411c4c58d2ca21e221}"
 PUBLIC_IP="${PUBLIC_IP:-3.73.242.203}"
+MEDIASOUP_PORT="${MEDIASOUP_PORT:-40000}"
+MEETING_BASE_URL="${MEETING_BASE_URL:-https://admin.simfree.io/meet}"
 
 echo "==> Clone or update repo"
 if [[ -d "$REPO_DIR/.git" ]]; then
@@ -28,12 +30,23 @@ USE_HTTPS=false
 TURN_URL=turn:${PUBLIC_IP}:3478
 TURN_SECRET=${TURN_SECRET}
 TURN_CREDENTIAL_TTL_SECONDS=3600
+MEDIASOUP_ANNOUNCED_IP=${PUBLIC_IP}
+MEDIASOUP_PORT=${MEDIASOUP_PORT}
+SFU_MAX_PEERS=6
+MEETING_BASE_URL=${MEETING_BASE_URL}
+GUEST_JWT_TTL_SECONDS=3600
 EOF
+
+echo "==> Open firewall for mediasoup WebRTC (UDP/TCP ${MEDIASOUP_PORT})"
+if command -v ufw >/dev/null 2>&1; then
+  sudo ufw allow "${MEDIASOUP_PORT}/udp" || true
+  sudo ufw allow "${MEDIASOUP_PORT}/tcp" || true
+fi
 
 echo "==> Install coturn"
 sudo TURN_SECRET="${TURN_SECRET}" EXTERNAL_IP="${PUBLIC_IP}" bash "$REPO_DIR/scripts/install-coturn-ubuntu.sh"
 
-echo "==> Build videocalling"
+echo "==> Build videocalling (mediasoup native worker compiles on Linux)"
 cd "$REPO_DIR"
 corepack enable 2>/dev/null || true
 pnpm install --frozen-lockfile
@@ -56,3 +69,4 @@ if [[ -f "$API_ENV" ]]; then
 fi
 
 echo "Done. Configure nginx /video-api/ proxy to 127.0.0.1:3004 (see deploy/nginx-video-snippet.conf)."
+echo "SFU media uses UDP/TCP ${MEDIASOUP_PORT} direct to ${PUBLIC_IP} (not via Cloudflare)."

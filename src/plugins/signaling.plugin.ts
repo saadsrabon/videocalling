@@ -5,6 +5,11 @@ import { authenticateConnection } from "../signaling/auth.js";
 import { ConnectionRegistry } from "../signaling/connection-registry.js";
 import { routeSignalingMessage } from "../signaling/router.js";
 import { sendMessage } from "../signaling/message-types.js";
+import {
+  broadcastSfuEvent,
+  type SignalingContext,
+} from "../signaling/handlers/sfu.js";
+import { handlePeerDisconnect } from "../signaling/handlers/join.js";
 
 declare module "fastify" {
   interface FastifyInstance {
@@ -15,6 +20,19 @@ declare module "fastify" {
 const plugin: FastifyPluginAsync = async (app) => {
   const registry = new ConnectionRegistry();
   app.decorate("signalingRegistry", registry);
+
+  app.sfuService.on((event) => {
+    const ctx: SignalingContext = {
+      user: { userId: "" },
+      roomService: app.roomService,
+      registry,
+      sfuService: app.sfuService,
+      send: () => {
+        /* broadcast only */
+      },
+    };
+    broadcastSfuEvent(ctx, event.roomId, event);
+  });
 
   await app.register(websocket);
 
@@ -49,10 +67,11 @@ const plugin: FastifyPluginAsync = async (app) => {
           v: 1,
         });
 
-        const ctx = {
+        const ctx: SignalingContext = {
           user,
           roomService: app.roomService,
           registry,
+          sfuService: app.sfuService,
           send: (payload: string) => {
             if (socket.readyState === socket.OPEN) {
               socket.send(payload);
@@ -70,6 +89,14 @@ const plugin: FastifyPluginAsync = async (app) => {
         });
 
         socket.on("close", () => {
+          handlePeerDisconnect(
+            {
+              roomService: app.roomService,
+              registry,
+              sfuService: app.sfuService,
+            },
+            user.userId,
+          );
           registry.remove(user.userId, socket);
           app.log.info({ userId: user.userId }, "Signaling connection closed");
         });
@@ -87,5 +114,5 @@ const plugin: FastifyPluginAsync = async (app) => {
 
 export const signalingPlugin = fp(plugin, {
   name: "signaling-plugin",
-  dependencies: ["auth-plugin", "rooms-plugin"],
+  dependencies: ["auth-plugin", "rooms-plugin", "sfu-plugin"],
 });

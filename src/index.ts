@@ -6,10 +6,12 @@ import { config } from "./config/env.js";
 import { buildClientIceConfig } from "./config/ice-service.js";
 import { authPlugin } from "./plugins/auth.plugin.js";
 import { roomsPlugin } from "./plugins/rooms.plugin.js";
+import { sfuPlugin } from "./plugins/sfu.plugin.js";
 import { signalingPlugin } from "./plugins/signaling.plugin.js";
 import { devTokenRoutes } from "./routes/dev-token.js";
 import { healthRoutes } from "./routes/health.js";
 import { iceServerRoutes } from "./routes/ice-servers.js";
+import { meetingRoutes } from "./routes/meetings.js";
 import { meRoutes } from "./routes/me.js";
 import { roomRoutes } from "./routes/rooms.js";
 
@@ -37,8 +39,10 @@ async function start() {
         {
           ice: buildClientIceConfig(config),
           turnEnabled: config.turnUrls.length > 0,
+          mediasoupAnnouncedIp: config.mediasoupAnnouncedIp,
+          mediasoupPort: config.mediasoupPort,
         },
-        "ICE config loaded",
+        "ICE + SFU config loaded",
       );
     }
 
@@ -48,10 +52,12 @@ async function start() {
 
     await app.register(authPlugin, { adapter: authAdapter });
     await app.register(roomsPlugin);
+    await app.register(sfuPlugin);
     await app.register(healthRoutes);
     await app.register(iceServerRoutes);
     await app.register(meRoutes);
     await app.register(roomRoutes);
+    await app.register(meetingRoutes);
     await app.register(signalingPlugin);
     await app.listen({ port: config.port, host: config.host });
   } catch (error) {

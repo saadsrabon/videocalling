@@ -2,7 +2,7 @@
 
 > Learn this project by reading files in a deliberate order — from bootstrap to WebRTC demo.
 >
-> **Last updated:** 2026-06-09
+> **Last updated:** 2026-06-10
 
 ---
 
@@ -14,6 +14,7 @@ You do **not** need to read every file at once. Pick one path:
 |------|------------|
 | Understand the big picture | [Architecture at a glance](#architecture-at-a-glance) |
 | Follow a video call end-to-end | [Trace a 1:1 call](#trace-a-11-call-file-by-file) |
+| Follow a group meeting (SFU) | [Trace an SFU meeting](#trace-an-sfu-meeting) |
 | Learn backend module by module | [Recommended reading order](#recommended-reading-order) |
 | Learn the browser client | [Client SDK path](#client-sdk-path) |
 | Run and poke the system | [Hands-on exploration](#hands-on-exploration) |
@@ -33,11 +34,12 @@ videocalling/
 │   ├── auth/                 # Pluggable auth adapters (JWT, session)
 │   ├── plugins/              # Fastify plugins (auth, rooms, signaling)
 │   ├── routes/               # Thin HTTP handlers
-│   ├── rooms/                # Room domain + in-memory store
-│   ├── signaling/            # WebSocket relay (join, SDP, ICE)
+│   ├── rooms/                # Room domain + in-memory store (+ meeting codes)
+│   ├── sfu/                  # mediasoup worker, router, transports (group calls)
+│   ├── signaling/            # WebSocket relay (join, SDP, ICE, sfu.*)
 │   └── turn/                 # TURN credential generation (coturn HMAC)
 │
-├── packages/client-sdk/      # Browser SDK (VideoClient)
+├── packages/client-sdk/      # Browser SDK (VideoClient, StaffCallClient, MeetingClient)
 ├── examples/demo/            # Reference frontend (plain HTML + JS)
 ├── docs/                     # Guides (you are here)
 ├── scripts/                  # Dev helpers (token, cert, TURN secret)
@@ -342,7 +344,16 @@ Quick lookup table when you know *what* you want but not *where* it is.
 |------|------|
 | `types.ts` | `Room`, `RoomStore`, errors |
 | `room-store.ts` | In-memory store (`Map`) |
-| `room-service.ts` | Business logic: create, join, list |
+| `room-service.ts` | Business logic: create, join, list, meeting codes |
+
+### `src/sfu/`
+
+| File | Role |
+|------|------|
+| `worker.ts` | Start mediasoup Worker + WebRtcServer |
+| `sfu-service.ts` | Per-room Router, transports, producers, consumers |
+| `media-codecs.ts` | Opus + VP8/VP9/H264 codec list |
+| `types.ts` | SFU peer/room types + errors |
 
 ### `src/signaling/`
 
@@ -355,6 +366,22 @@ Quick lookup table when you know *what* you want but not *where* it is.
 | `handlers/join.ts` | Room binding + participant notify |
 | `handlers/sdp.ts` | Offer/answer relay + validation |
 | `handlers/ice-candidate.ts` | ICE relay + validation |
+| `handlers/sfu.ts` | SFU signaling (`sfu.*` messages) |
+| `handlers/call.ts` | Staff 1:1 call invite relay |
+
+---
+
+## Trace an SFU meeting
+
+1. Staff `POST /v1/meetings` → [`src/routes/meetings.ts`](../src/routes/meetings.ts) → `RoomService.createMeeting` (mode `sfu`, 8-char code).
+2. Guest `POST /v1/meetings/:code/guest-token` → short-lived JWT with `role: guest` + `roomId`.
+3. Client `POST /v1/meetings/:code/join` (staff) or `guest-join` (guest) → HTTP room membership.
+4. WS `join { roomId }` → [`handlers/join.ts`](../src/signaling/handlers/join.ts) → `sfuService.joinPeer`.
+5. Client sends `sfu.getRtpCapabilities` → `sfu.createTransport` (send + recv) → `sfu.produce` / `sfu.consume`.
+6. RTP flows UDP/TCP to mediasoup on `MEDIASOUP_PORT` (not through nginx).
+7. On disconnect → `handlePeerDisconnect` → `sfuService.removePeer` → `sfu.peerLeft` broadcast.
+
+Client: [`packages/client-sdk/src/meeting-client.ts`](../packages/client-sdk/src/meeting-client.ts) · Simfree UI: `apps/admin/src/components/meeting/MeetingRoom.tsx`.
 
 ### `src/routes/`
 
@@ -490,8 +517,9 @@ Knowing gaps helps you avoid searching for things that don't exist:
 | Feature | Status | Likely future location |
 |---------|--------|------------------------|
 | Redis room store | ❌ | `src/rooms/redis-room-store.ts` |
-| Group calls (3+) | ❌ | signaling + SDK mesh logic |
-| Screen share | ❌ | client SDK + optional signaling |
+| SFU group meetings (6 peers) | ✅ | `src/sfu/`, `MeetingClient`, `/v1/meetings` |
+| Screen share (meetings) | ✅ | `MeetingClient.startScreenShare` |
+| Virtual backgrounds | ✅ (client) | Simfree admin `virtual-background.ts` |
 | Recording | ❌ | separate service |
 | Production auth service | ❌ | external; session adapter calls it |
 | Native mobile SDK | ❌ | new package |
