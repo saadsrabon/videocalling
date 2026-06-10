@@ -29,8 +29,9 @@ async function start() {
   try {
     const authAdapter = createAuthAdapter(config);
 
+    await app.register(cors, { origin: true });
+
     if (config.nodeEnv === "development") {
-      await app.register(cors, { origin: true });
       await app.register(devTokenRoutes);
       app.log.info(
         {

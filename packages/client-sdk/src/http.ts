@@ -3,7 +3,7 @@ export function normalizeToken(token: string): string {
   return token.trim().replace(/^Bearer\s+/i, "").replace(/\s+/g, "");
 }
 
-/** Validate and normalize API base URL (origin only). */
+/** Validate and normalize API base URL (origin, optional path prefix e.g. /video-api). */
 export function normalizeServerUrl(serverUrl: string): string {
   const trimmed = serverUrl.trim();
 
@@ -23,6 +23,11 @@ export function normalizeServerUrl(serverUrl: string): string {
 
   if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
     throw new Error("Server URL must use http:// or https://");
+  }
+
+  const path = parsed.pathname.replace(/\/$/, "");
+  if (path && path !== "/") {
+    return `${parsed.origin}${path}`;
   }
 
   return parsed.origin;

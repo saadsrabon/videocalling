@@ -19,7 +19,24 @@ Browser  ◄──media relay────────►  Browser (when P2P fail
 | Ports | UDP/TCP **3478**, UDP relay range **49152–65535** |
 | Public IP | Required |
 
-## 2. Install coturn
+## 2. Install coturn (automated)
+
+From your **local machine**, copy the script to the VPS and run it (replace the secret with your `TURN_SECRET` from videocalling `.env`):
+
+```bash
+scp deploy/setup-coturn.sh ubuntu@3.73.242.203:/tmp/
+ssh ubuntu@3.73.242.203 'sudo TURN_SECRET="YOUR_TURN_SECRET" bash /tmp/setup-coturn.sh'
+```
+
+Or on the VPS directly after cloning this repo:
+
+```bash
+sudo TURN_SECRET="YOUR_TURN_SECRET" bash deploy/setup-coturn.sh
+```
+
+The script installs coturn, opens UFW ports, detects the public IP, and writes `/etc/turnserver.conf`.
+
+## 3. Manual install (alternative)
 
 ```bash
 sudo apt update
@@ -27,7 +44,7 @@ sudo apt install -y coturn
 sudo systemctl enable coturn
 ```
 
-## 3. Configure coturn
+## 4. Manual configure coturn
 
 Edit `/etc/turnserver.conf` (or copy from `deploy/coturn.turnserver.conf` in this repo).
 
@@ -58,7 +75,7 @@ sudo sed -i 's/#TURNSERVER_ENABLED=1/TURNSERVER_ENABLED=1/' /etc/default/coturn
 sudo systemctl restart coturn
 ```
 
-## 4. Firewall
+## 5. Firewall
 
 ```bash
 sudo ufw allow 3478/tcp
@@ -69,7 +86,7 @@ sudo ufw reload
 
 Also open these in your cloud **security group**.
 
-## 5. Video API `.env`
+## 6. Video API `.env`
 
 Use the **same** secret as coturn `static-auth-secret`:
 
@@ -81,7 +98,7 @@ TURN_CREDENTIAL_TTL_SECONDS=3600
 
 Restart the API after changing env.
 
-## 6. Verify
+## 7. Verify
 
 **API:**
 

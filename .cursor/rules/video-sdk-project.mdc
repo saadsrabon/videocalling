@@ -28,6 +28,8 @@ index.ts    → bootstrap/wiring only
 - Prefer **interfaces** over concrete classes for anything swappable (auth, room store).
 - **No business logic** in route handlers or `index.ts`.
 - Do not skip steps in `PLAN.md`; mark completed steps `[x]` when done.
+- When adding a **user-facing feature** (API, signaling, or SDK), update `docs/frontend-integration.md`: feature index row, section, API reference, and **Last updated** date.
+- When adding **modules, folders, or runtime flow changes**, update `docs/codebase-exploration.md`: repo map, module reference, trace section, and **Last updated** date.
 
 ## Teaching format (required on every step)
 

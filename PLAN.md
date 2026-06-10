@@ -67,6 +67,10 @@ src/
 | 5 — TURN (VPS / coturn) | ✅ Complete |
 | 6 — Browser SDK | ✅ Complete |
 
+**Frontend docs:** [`docs/frontend-integration.md`](docs/frontend-integration.md) — update when adding user-facing API/SDK features.
+
+**Codebase tour:** [`docs/codebase-exploration.md`](docs/codebase-exploration.md) — file map and reading order for learning the repo.
+
 ---
 
 ## Phase 0 — Foundation

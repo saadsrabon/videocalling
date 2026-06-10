@@ -16,6 +16,43 @@ export type ClientMessage =
       to: string;
       candidate: IceCandidatePayload;
       v?: number;
+    }
+  | {
+      type: "call.invite";
+      to: string;
+      callId: string;
+      roomId: string;
+      fromName?: string;
+      fromEmail?: string;
+      v?: number;
+    }
+  | {
+      type: "call.accept";
+      to: string;
+      callId: string;
+      roomId: string;
+      v?: number;
+    }
+  | {
+      type: "call.reject";
+      to: string;
+      callId: string;
+      roomId: string;
+      v?: number;
+    }
+  | {
+      type: "call.end";
+      to: string;
+      callId: string;
+      roomId: string;
+      v?: number;
+    }
+  | {
+      type: "call.cancel";
+      to: string;
+      callId: string;
+      roomId: string;
+      v?: number;
     };
 
 export type ServerMessage =
@@ -33,6 +70,48 @@ export type ServerMessage =
       type: "ice-candidate";
       from: string;
       candidate: IceCandidatePayload;
+      v: number;
+    }
+  | {
+      type: "call.invite";
+      from: string;
+      to: string;
+      callId: string;
+      roomId: string;
+      fromName?: string;
+      fromEmail?: string;
+      v: number;
+    }
+  | {
+      type: "call.accept";
+      from: string;
+      to: string;
+      callId: string;
+      roomId: string;
+      v: number;
+    }
+  | {
+      type: "call.reject";
+      from: string;
+      to: string;
+      callId: string;
+      roomId: string;
+      v: number;
+    }
+  | {
+      type: "call.end";
+      from: string;
+      to: string;
+      callId: string;
+      roomId: string;
+      v: number;
+    }
+  | {
+      type: "call.cancel";
+      from: string;
+      to: string;
+      callId: string;
+      roomId: string;
       v: number;
     }
   | { type: "error"; code: string; message: string; v: number };
