@@ -2,7 +2,7 @@
 
 > Learn this project by reading files in a deliberate order — from bootstrap to WebRTC demo.
 >
-> **Last updated:** 2026-06-10
+> **Last updated:** 2026-06-11
 
 ---
 
@@ -40,10 +40,12 @@ videocalling/
 │   └── turn/                 # TURN credential generation (coturn HMAC)
 │
 ├── packages/client-sdk/      # Browser SDK (VideoClient, StaffCallClient, MeetingClient)
-├── examples/demo/            # Reference frontend (plain HTML + JS)
+├── examples/
+│   ├── demo/                 # 1:1 VideoClient reference UI
+│   └── meeting-demo/         # SFU MeetingClient reference UI (up to 6)
 ├── docs/                     # Guides (you are here)
 ├── scripts/                  # Dev helpers (token, cert, TURN secret)
-├── deploy/                   # coturn config template
+├── deploy/                   # VPS scripts, nginx snippet, PM2 config
 ├── certs/                    # Dev HTTPS certs (generated, gitignored)
 ├── PLAN.md                   # Build plan — phases, why, verify steps
 ├── .env.example              # All env vars documented
@@ -533,6 +535,7 @@ Knowing gaps helps you avoid searching for things that don't exist:
 |----------|----------|
 | [`PLAN.md`](../PLAN.md) | Learning *why* each phase was built |
 | [`docs/frontend-integration.md`](frontend-integration.md) | Integrating any frontend app |
+| [`docs/deployment-split-servers.md`](deployment-split-servers.md) | App and video API on separate hosts |
 | [`docs/coturn-vps.md`](coturn-vps.md) | TURN server on VPS |
 | [`.cursor/rules/video-sdk-project.mdc`](../.cursor/rules/video-sdk-project.mdc) | AI + contributor conventions |
 

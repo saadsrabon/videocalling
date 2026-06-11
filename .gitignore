@@ -4,4 +4,5 @@ dist/
 certs/
 *.log
 .DS_Store
+examples/meeting-demo/bundle.js
 simfree.pem

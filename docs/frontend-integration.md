@@ -2,7 +2,7 @@
 
 > How to connect **any frontend** (React, Vue, Angular, plain HTML, mobile WebView) to the Video SDK backend.
 >
-> **Last updated:** 2026-06-10 · **API version:** `v1` · **Signaling version:** `1`
+> **Last updated:** 2026-06-11 · **API version:** `v1` · **Signaling version:** `1`
 
 ---
 
@@ -86,7 +86,7 @@ sequenceDiagram
 |-------------|---------|
 | **HTTPS** | Required for camera/mic on LAN IPs. `localhost` over HTTP is OK. |
 | **Secure context** | WebRTC + `getUserMedia` need a secure context in production. |
-| **CORS** | Backend allows cross-origin requests (`origin: true`). Frontend can run on a different port/domain than the API. |
+| **CORS** | Backend allows cross-origin requests (`origin: true`). Frontend can run on a different port/domain than the API. See [`docs/deployment-split-servers.md`](deployment-split-servers.md). |
 | **Two distinct users** | 1:1 calls need **two different JWTs** (different `userId` claims). |
 | **POST body** | Room endpoints expect `Content-Type: application/json` with body `{}`. |
 
@@ -150,6 +150,23 @@ The SDK lives in this repo at `packages/client-sdk`. Build it:
 
 ```bash
 pnpm build:sdk
+```
+
+#### Sync to Simfree admin (`@simfree/video-client`)
+
+The Simfree monorepo keeps a copy at `packages/video-client` (`@simfree/video-client`). After changing SDK sources here, sync them:
+
+```bash
+npm run sync:simfree
+# or: SIMFREE_ROOT=/path/to/simfree-monorepo bash scripts/sync-sdk-to-simfree.sh
+```
+
+This copies `packages/client-sdk/src/*.ts` only — **not** `package.json` (Simfree keeps its package name and `prepare` script). Then rebuild in simfree-monorepo:
+
+```bash
+cd ../simfree-monorepo
+pnpm --filter @simfree/video-client build
+pnpm --filter admin build
 ```
 
 Import from your app:
@@ -552,6 +569,7 @@ pnpm token user-b
 | Doc | Topic |
 |-----|--------|
 | `docs/codebase-exploration.md` | Learn the repo — file map, reading order, call trace |
+| `docs/deployment-split-servers.md` | App on one host, video API on another |
 | `docs/coturn-vps.md` | TURN server setup on VPS |
 | `PLAN.md` | Backend build plan and phase tracker |
 | `examples/demo/` | Reference frontend implementation |

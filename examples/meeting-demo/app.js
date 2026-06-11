@@ -1,4 +1,4 @@
-import { MeetingClient } from "/packages/client-sdk/dist/index.js";
+import { MeetingClient } from "../../packages/client-sdk/dist/meeting-client.js";
 
 const serverUrlInput = document.getElementById("serverUrl");
 const hostTokenInput = document.getElementById("hostToken");
@@ -11,6 +11,7 @@ const remoteGrid = document.getElementById("remoteGrid");
 const logEl = document.getElementById("log");
 
 const hostTokenBtn = document.getElementById("hostTokenBtn");
+const useWifiServerBtn = document.getElementById("useWifiServerBtn");
 const createMeetingBtn = document.getElementById("createMeetingBtn");
 const hostJoinBtn = document.getElementById("hostJoinBtn");
 const guestJoinBtn = document.getElementById("guestJoinBtn");
@@ -31,21 +32,63 @@ function log(message) {
   logEl.scrollTop = logEl.scrollHeight;
 }
 
-function serverUrl() {
-  const trimmed = serverUrlInput.value.trim();
+function normalizeServerUrl(value) {
+  const trimmed = value.trim();
+
   if (!trimmed) {
     throw new Error("Server URL is required");
   }
-  return trimmed.replace(/\/$/, "");
+
+  let parsed;
+
+  try {
+    parsed = new URL(trimmed);
+  } catch {
+    throw new Error(
+      "Invalid server URL — use http://127.0.0.1:3004 (include http://)",
+    );
+  }
+
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+    throw new Error("Server URL must use http:// or https://");
+  }
+
+  return parsed.origin;
+}
+
+/** Docker dev API is HTTP on port 3004 — do not mirror page https:// here. */
+function wifiServerUrl() {
+  return `http://${window.location.hostname}:3004`;
+}
+
+function serverUrl() {
+  return normalizeServerUrl(serverUrlInput.value);
 }
 
 async function fetchDevToken(userId) {
-  const response = await fetch(
-    `${serverUrl()}/v1/dev/token?userId=${encodeURIComponent(userId)}`,
-  );
+  const baseUrl = serverUrl();
+  let response;
+
+  try {
+    response = await fetch(
+      `${baseUrl}/v1/dev/token?userId=${encodeURIComponent(userId)}`,
+    );
+  } catch {
+    throw new Error(
+      `Cannot reach video API at ${baseUrl}. Is Docker running (pnpm docker:dev)? Use http:// not https:// for local dev.`,
+    );
+  }
+
+  if (response.status === 404) {
+    throw new Error(
+      "Dev token endpoint not found — video server must run with NODE_ENV=development.",
+    );
+  }
+
   if (!response.ok) {
     throw new Error(`Dev token failed (${response.status})`);
   }
+
   const data = await response.json();
   return data.token;
 }
@@ -182,6 +225,11 @@ hostTokenBtn.addEventListener("click", async () => {
   }
 });
 
+useWifiServerBtn.addEventListener("click", () => {
+  serverUrlInput.value = wifiServerUrl();
+  log(`Server URL set to ${serverUrlInput.value}`);
+});
+
 createMeetingBtn.addEventListener("click", async () => {
   try {
     const token = hostTokenInput.value.trim() || joinTokenInput.value.trim();
@@ -314,6 +362,12 @@ if (params.get("code")) {
 }
 if (params.get("server")) {
   serverUrlInput.value = params.get("server");
+} else if (
+  window.location.hostname !== "localhost" &&
+  window.location.hostname !== "127.0.0.1"
+) {
+  serverUrlInput.value = wifiServerUrl();
+  log(`Server URL auto-set to ${serverUrlInput.value} (LAN access)`);
 }
 
-log("Ready — start Docker backend, then create or join a meeting.");
+log("Ready — start Docker backend (pnpm docker:dev), then Get token (host).");
