@@ -133,6 +133,12 @@ export type MeetingClientEvent =
     }
   | { type: "screen-share-started" }
   | { type: "screen-share-stopped" }
+  | {
+      type: "transport-state";
+      direction: "send" | "recv";
+      state: string;
+      message: string;
+    }
   | { type: "error"; message: string };
 
 export type MeetingClientEventHandler = (event: MeetingClientEvent) => void;

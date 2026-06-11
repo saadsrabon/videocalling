@@ -106,6 +106,69 @@ function describeTrack(track: MediaStreamTrack): Record<string, unknown> {
   };
 }
 
+const MEDIA_PORT_HINT =
+  "Open UDP/TCP ports 40000–40100 on the video server (AWS security group) for SFU media.";
+
+async function getUserMediaWithRetry(
+  log: (message: string, data?: Record<string, unknown>) => void,
+): Promise<MediaStream> {
+  if (!navigator.mediaDevices?.getUserMedia) {
+    throw new Error("Camera/mic API not available — use HTTPS and a supported browser");
+  }
+
+  const attempts: MediaStreamConstraints[] = [
+    { audio: true, video: true },
+    {
+      audio: true,
+      video: { width: { ideal: 1280 }, height: { ideal: 720 }, frameRate: { ideal: 24 } },
+    },
+    {
+      audio: true,
+      video: { width: { ideal: 640 }, height: { ideal: 480 }, frameRate: { ideal: 24 } },
+    },
+  ];
+
+  let lastError: unknown;
+
+  for (let attempt = 0; attempt < attempts.length; attempt += 1) {
+    const constraints = attempts[attempt]!;
+
+    try {
+      log("requesting getUserMedia", { attempt: attempt + 1, constraints });
+      const stream = await navigator.mediaDevices.getUserMedia(constraints);
+      log("getUserMedia succeeded", {
+        attempt: attempt + 1,
+        video: stream.getVideoTracks().map((track) => describeTrack(track)),
+        audio: stream.getAudioTracks().map((track) => describeTrack(track)),
+      });
+      return stream;
+    } catch (error) {
+      lastError = error;
+      const name = error instanceof DOMException ? error.name : "Error";
+      const message = error instanceof Error ? error.message : String(error);
+      log("getUserMedia failed", { attempt: attempt + 1, name, message });
+
+      if (name === "NotAllowedError" || name === "SecurityError") {
+        throw error;
+      }
+
+      if (attempt < attempts.length - 1) {
+        await new Promise((resolve) => setTimeout(resolve, 400));
+      }
+    }
+  }
+
+  if (lastError instanceof DOMException && lastError.name === "AbortError") {
+    throw new Error(
+      `Camera timed out (${lastError.message}). Close other apps using the camera and try again.`,
+    );
+  }
+
+  throw lastError instanceof Error
+    ? lastError
+    : new Error("Could not start camera or microphone");
+}
+
 export class MeetingClient {
   private readonly serverUrl: string;
   private readonly token: string;
@@ -480,9 +543,38 @@ export class MeetingClient {
     });
   }
 
+  private watchTransportState(direction: "send" | "recv", transport: Transport): void {
+    transport.on("connectionstatechange", (state) => {
+      this.log(`${direction} transport connection state`, { state });
+
+      if (state === "connected") {
+        return;
+      }
+
+      if (state === "failed" || state === "disconnected") {
+        const message =
+          state === "failed"
+            ? `Media connection failed (${direction}). ${MEDIA_PORT_HINT}`
+            : `${direction} transport ${state}`;
+
+        this.emit({
+          type: "transport-state",
+          direction,
+          state,
+          message,
+        });
+      }
+    });
+  }
+
   private async connectAndJoin(_options: MeetingClientJoinOptions): Promise<void> {
     const baseUrl = this.serverUrl;
     const headers = authHeaders(this.token);
+
+    this.log("acquiring camera/mic before network setup");
+    this.localStream = await getUserMediaWithRetry((message, data) =>
+      this.log(message, data),
+    );
 
     const iceResponse = await fetch(`${baseUrl}/v1/ice-servers`, { headers });
     if (!iceResponse.ok) {
@@ -663,9 +755,7 @@ export class MeetingClient {
       dtlsParameters: created.dtlsParameters as never,
     });
 
-    this.sendTransport.on("connectionstatechange", (state) => {
-      this.log("send transport connection state", { state });
-    });
+    this.watchTransportState("send", this.sendTransport);
 
     this.sendTransport.on(
       "connect",
@@ -734,9 +824,7 @@ export class MeetingClient {
       dtlsParameters: created.dtlsParameters as never,
     });
 
-    this.recvTransport.on("connectionstatechange", (state) => {
-      this.log("recv transport connection state", { state });
-    });
+    this.watchTransportState("recv", this.recvTransport);
 
     this.recvTransport.on(
       "connect",
@@ -758,10 +846,11 @@ export class MeetingClient {
   }
 
   private async startLocalMedia(): Promise<void> {
-    this.localStream = await navigator.mediaDevices.getUserMedia({
-      audio: true,
-      video: true,
-    });
+    if (!this.localStream) {
+      this.localStream = await getUserMediaWithRetry((message, data) =>
+        this.log(message, data),
+      );
+    }
 
     const audioTrack = this.localStream.getAudioTracks()[0];
     const videoTrack = this.customVideoTrack ?? this.localStream.getVideoTracks()[0];

@@ -37,11 +37,17 @@ MEETING_BASE_URL=${MEETING_BASE_URL}
 GUEST_JWT_TTL_SECONDS=3600
 EOF
 
-echo "==> Open firewall for mediasoup WebRTC (UDP/TCP ${MEDIASOUP_PORT})"
+echo "==> Open firewall for mediasoup WebRTC (UDP/TCP ${MEDIASOUP_PORT}-40100)"
 if command -v ufw >/dev/null 2>&1; then
-  sudo ufw allow "${MEDIASOUP_PORT}/udp" || true
-  sudo ufw allow "${MEDIASOUP_PORT}/tcp" || true
+  sudo ufw allow "${MEDIASOUP_PORT}:40100/udp" || true
+  sudo ufw allow "${MEDIASOUP_PORT}:40100/tcp" || true
 fi
+
+echo "==> IMPORTANT: AWS EC2 security group must allow inbound UDP+TCP ${MEDIASOUP_PORT}-40100"
+echo "    (Signaling uses HTTPS :443; SFU media is direct to ${PUBLIC_IP}:${MEDIASOUP_PORT} — not via Cloudflare.)"
+echo "    EC2 console → Security Groups → default → Inbound rules → Add:"
+echo "      Custom UDP  ${MEDIASOUP_PORT}-40100  Source 0.0.0.0/0"
+echo "      Custom TCP  ${MEDIASOUP_PORT}-40100  Source 0.0.0.0/0"
 
 echo "==> Install coturn"
 sudo TURN_SECRET="${TURN_SECRET}" EXTERNAL_IP="${PUBLIC_IP}" bash "$REPO_DIR/scripts/install-coturn-ubuntu.sh"
