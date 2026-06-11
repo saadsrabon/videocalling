@@ -16,7 +16,10 @@
     "typecheck": "tsc --noEmit",
     "typecheck:all": "npm run typecheck && npm run typecheck --prefix packages/client-sdk",
     "demo": "npm run build:sdk && npx --yes serve . -l tcp://0.0.0.0:5000",
+    "demo:meeting": "npm run build:sdk && npx --yes serve . -l tcp://127.0.0.1:5000",
     "demo:https": "npm run build:sdk && npm run cert && npx --yes serve . -l tcp://0.0.0.0:5000 --ssl-cert certs/dev-cert.pem --ssl-key certs/dev-key.pem",
+    "docker:dev": "docker compose -f docker-compose.dev.yml up --build",
+    "docker:dev:detach": "docker compose -f docker-compose.dev.yml up --build -d",
     "cert": "node scripts/generate-dev-cert.mjs 192.168.1.141",
     "turn:secret": "node scripts/generate-turn-secret.mjs",
     "token": "node --import tsx/esm scripts/generate-token.mjs"

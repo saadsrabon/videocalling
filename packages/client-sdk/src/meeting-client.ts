@@ -88,6 +88,24 @@ interface RemoteTrackMeta {
   stream: MediaStream;
 }
 
+interface PendingConsume {
+  peerId: string;
+  producerId: string;
+  kind: "audio" | "video";
+  source: MediaSource;
+}
+
+function describeTrack(track: MediaStreamTrack): Record<string, unknown> {
+  return {
+    id: track.id,
+    kind: track.kind,
+    readyState: track.readyState,
+    muted: track.muted,
+    enabled: track.enabled,
+    label: track.label,
+  };
+}
+
 export class MeetingClient {
   private readonly serverUrl: string;
   private readonly token: string;
@@ -119,6 +137,7 @@ export class MeetingClient {
 
   private readonly remoteTracks = new Map<string, RemoteTrackMeta>();
   private readonly producerIndex = new Map<string, string>();
+  private readonly pendingConsumes: PendingConsume[] = [];
 
   private constructor(options: MeetingClientJoinOptions) {
     this.serverUrl = normalizeServerUrl(options.serverUrl);
@@ -319,6 +338,28 @@ export class MeetingClient {
     }
   }
 
+  private log(message: string, data?: Record<string, unknown>): void {
+    if (data) {
+      console.log(`[Meeting][${this.code}] ${message}`, data);
+      return;
+    }
+
+    console.log(`[Meeting][${this.code}] ${message}`);
+  }
+
+  private watchTrack(track: MediaStreamTrack, label: string): void {
+    this.log(`track snapshot (${label})`, describeTrack(track));
+    track.addEventListener("mute", () =>
+      this.log(`track muted (${label})`, describeTrack(track)),
+    );
+    track.addEventListener("unmute", () =>
+      this.log(`track unmuted (${label})`, describeTrack(track)),
+    );
+    track.addEventListener("ended", () =>
+      this.log(`track ended (${label})`, describeTrack(track)),
+    );
+  }
+
   private nextRequestId(): string {
     this.requestCounter += 1;
     return `req-${this.requestCounter}`;
@@ -380,16 +421,25 @@ export class MeetingClient {
         if (message.peerId === this._userId) {
           return;
         }
+        this.log("sfu.newProducer", {
+          peerId: message.peerId,
+          producerId: message.producerId,
+          kind: message.kind,
+          source: message.appData?.source ?? "camera",
+        });
         void this.consumeRemoteProducer(
           message.peerId,
           message.producerId,
           message.kind,
           message.appData?.source === "screen" ? "screen" : "camera",
         ).catch((error) => {
-          this.emit({
-            type: "error",
-            message: error instanceof Error ? error.message : "Consume failed",
+          const errMsg =
+            error instanceof Error ? error.message : "Consume failed";
+          this.log("consume failed (newProducer)", {
+            producerId: message.producerId,
+            error: errMsg,
           });
+          this.emit({ type: "error", message: errMsg });
         });
         break;
       case "sfu.producerClosed":
@@ -525,6 +575,11 @@ export class MeetingClient {
     await this.startLocalMedia();
 
     const existingProducers = await this.listExistingProducers();
+    this.log("existing producers in room", {
+      count: existingProducers.length,
+      producers: existingProducers,
+    });
+
     for (const producer of existingProducers) {
       await this.consumeRemoteProducer(
         producer.peerId,
@@ -532,6 +587,38 @@ export class MeetingClient {
         producer.kind,
         producer.source,
       );
+    }
+
+    await this.flushPendingConsumes();
+    this.log("mediasoup session ready", { userId: this._userId, roomId: this.roomId });
+  }
+
+  private async flushPendingConsumes(): Promise<void> {
+    if (this.pendingConsumes.length === 0) {
+      return;
+    }
+
+    const queue = [...this.pendingConsumes];
+    this.pendingConsumes.length = 0;
+    this.log("flushing queued consumes", { count: queue.length });
+
+    for (const item of queue) {
+      try {
+        await this.consumeRemoteProducer(
+          item.peerId,
+          item.producerId,
+          item.kind,
+          item.source,
+        );
+      } catch (error) {
+        const errMsg =
+          error instanceof Error ? error.message : "Queued consume failed";
+        this.log("queued consume failed", {
+          producerId: item.producerId,
+          error: errMsg,
+        });
+        this.emit({ type: "error", message: errMsg });
+      }
     }
   }
 
@@ -574,6 +661,10 @@ export class MeetingClient {
       iceParameters: created.iceParameters as never,
       iceCandidates: created.iceCandidates as never,
       dtlsParameters: created.dtlsParameters as never,
+    });
+
+    this.sendTransport.on("connectionstatechange", (state) => {
+      this.log("send transport connection state", { state });
     });
 
     this.sendTransport.on(
@@ -643,6 +734,10 @@ export class MeetingClient {
       dtlsParameters: created.dtlsParameters as never,
     });
 
+    this.recvTransport.on("connectionstatechange", (state) => {
+      this.log("recv transport connection state", { state });
+    });
+
     this.recvTransport.on(
       "connect",
       (
@@ -674,7 +769,16 @@ export class MeetingClient {
     if (audioTrack && this.sendTransport) {
       this.micProducer = await this.sendTransport.produce({
         track: audioTrack,
-        appData: { source: "camera" },
+        appData: { source: "mic" },
+      });
+      this.log("local mic produced", {
+        producerId: this.micProducer.id,
+        track: describeTrack(audioTrack),
+      });
+    } else {
+      this.log("local mic missing — no audio producer", {
+        hasAudioTrack: Boolean(audioTrack),
+        hasSendTransport: Boolean(this.sendTransport),
       });
     }
 
@@ -682,6 +786,15 @@ export class MeetingClient {
       this.cameraProducer = await this.sendTransport.produce({
         track: videoTrack,
         appData: { source: "camera" },
+      });
+      this.log("local camera produced", {
+        producerId: this.cameraProducer.id,
+        track: describeTrack(videoTrack),
+      });
+    } else {
+      this.log("local camera missing — no video producer", {
+        hasVideoTrack: Boolean(videoTrack),
+        hasSendTransport: Boolean(this.sendTransport),
       });
     }
   }
@@ -693,10 +806,20 @@ export class MeetingClient {
     source: MediaSource,
   ): Promise<void> {
     if (!this.device || !this.recvTransport) {
+      if (!this.pendingConsumes.some((item) => item.producerId === producerId)) {
+        this.pendingConsumes.push({ peerId, producerId, kind, source });
+        this.log("queued consume (recv transport not ready)", {
+          peerId,
+          producerId,
+          kind,
+          source,
+        });
+      }
       return;
     }
 
     if (this.remoteTracks.has(producerId)) {
+      this.log("skip duplicate consume", { producerId, peerId, kind });
       return;
     }
 
@@ -718,9 +841,31 @@ export class MeetingClient {
       consumerId: consumer.id,
     });
 
+    if (!consumer.track) {
+      throw new Error(`Consumer ${consumer.id} has no track (${kind})`);
+    }
+
     const stream = new MediaStream([consumer.track]);
     const resolvedSource =
       consumed.appData?.source === "screen" ? "screen" : source;
+
+    this.log("remote track ready", {
+      peerId,
+      producerId,
+      consumerId: consumer.id,
+      kind,
+      source: resolvedSource,
+      track: describeTrack(consumer.track),
+      paused: consumer.paused,
+    });
+    this.watchTrack(consumer.track, `${peerId}/${kind}`);
+
+    consumer.on("transportclose", () => {
+      this.log("consumer transport closed", { producerId, peerId, kind });
+    });
+    consumer.on("trackended", () => {
+      this.log("consumer track ended", { producerId, peerId, kind });
+    });
 
     this.remoteTracks.set(producerId, {
       consumerId: consumer.id,

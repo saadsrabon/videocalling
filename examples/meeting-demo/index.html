@@ -1,0 +1,204 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>SFU Meeting Demo (up to 6)</title>
+    <style>
+      :root {
+        color-scheme: dark;
+        font-family: system-ui, sans-serif;
+      }
+
+      body {
+        margin: 0;
+        padding: 24px;
+        background: #0f1115;
+        color: #f5f5f5;
+      }
+
+      .hint {
+        color: #aab;
+        font-size: 0.95rem;
+        line-height: 1.5;
+      }
+
+      .panel {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+        gap: 16px;
+        margin: 16px 0;
+      }
+
+      label {
+        display: block;
+      }
+
+      input,
+      button,
+      textarea,
+      select {
+        width: 100%;
+        box-sizing: border-box;
+        margin-top: 6px;
+        padding: 10px;
+        border-radius: 8px;
+        border: 1px solid #333;
+        background: #171a21;
+        color: inherit;
+      }
+
+      button {
+        cursor: pointer;
+      }
+
+      button:disabled {
+        opacity: 0.5;
+        cursor: not-allowed;
+      }
+
+      .controls {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        margin-top: 8px;
+      }
+
+      .controls button {
+        width: auto;
+        flex: 1 1 140px;
+        margin-top: 0;
+      }
+
+      .video-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+        gap: 12px;
+        margin-top: 16px;
+      }
+
+      .tile {
+        background: #171a21;
+        border-radius: 12px;
+        padding: 8px;
+      }
+
+      .tile h3 {
+        margin: 0 0 8px;
+        font-size: 0.9rem;
+        color: #aab;
+      }
+
+      video {
+        width: 100%;
+        background: #111;
+        border-radius: 8px;
+        aspect-ratio: 16 / 9;
+      }
+
+      pre {
+        background: #171a21;
+        padding: 12px;
+        border-radius: 8px;
+        overflow: auto;
+        min-height: 120px;
+      }
+
+      code {
+        background: #222;
+        padding: 2px 6px;
+        border-radius: 4px;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>SFU Meeting Demo</h1>
+    <p class="hint">
+      Test group meetings (up to <strong>6 participants</strong>) against the
+      Docker SFU backend. Open this page in <strong>multiple tabs</strong> or
+      browsers — each needs a unique identity. Use
+      <code>http://127.0.0.1:3004</code> as the server URL with
+      <code>docker compose -f docker-compose.dev.yml up</code>.
+    </p>
+
+    <label>
+      Server URL
+      <input id="serverUrl" value="http://127.0.0.1:3004" />
+    </label>
+
+    <div class="panel">
+      <div>
+        <h2>Host (staff JWT)</h2>
+        <label>
+          JWT token
+          <textarea id="hostToken" rows="2" placeholder="Staff token"></textarea>
+        </label>
+        <div class="controls">
+          <button type="button" id="hostTokenBtn">Get token (host)</button>
+          <button type="button" id="createMeetingBtn">Create meeting</button>
+        </div>
+        <label>
+          Meeting code
+          <input id="meetingCode" placeholder="AB12CD34" />
+        </label>
+        <label>
+          Join URL (share)
+          <input id="joinUrl" readonly />
+        </label>
+        <div class="controls">
+          <button type="button" id="hostJoinBtn">Join as host</button>
+        </div>
+      </div>
+
+      <div>
+        <h2>Guest</h2>
+        <label>
+          Your name
+          <input id="guestName" placeholder="Alex Guest" />
+        </label>
+        <div class="controls">
+          <button type="button" id="guestJoinBtn">Join as guest</button>
+        </div>
+        <p class="hint">
+          Or paste a staff/guest JWT and meeting code, then use
+          <strong>Join with token</strong>.
+        </p>
+        <label>
+          Token (staff or guest)
+          <textarea id="joinToken" rows="2"></textarea>
+        </label>
+        <div class="controls">
+          <button type="button" id="tokenJoinBtn">Join with token</button>
+        </div>
+        <div class="controls">
+          <button type="button" data-user="user-1">Token user-1</button>
+          <button type="button" data-user="user-2">Token user-2</button>
+          <button type="button" data-user="user-3">Token user-3</button>
+          <button type="button" data-user="user-4">Token user-4</button>
+          <button type="button" data-user="user-5">Token user-5</button>
+          <button type="button" data-user="user-6">Token user-6</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="controls">
+      <button type="button" id="leaveBtn" disabled>Leave meeting</button>
+      <button type="button" id="muteMicBtn" disabled>Mute mic</button>
+      <button type="button" id="cameraOffBtn" disabled>Camera off</button>
+      <button type="button" id="screenShareBtn" disabled>Share screen</button>
+    </div>
+
+    <div class="video-grid">
+      <div class="tile">
+        <h3>You (local)</h3>
+        <video id="localVideo" autoplay playsinline muted></video>
+      </div>
+      <div id="remoteGrid"></div>
+    </div>
+
+    <h2>Log</h2>
+    <pre id="log"></pre>
+
+    <script type="module" src="./app.js"></script>
+  </body>
+</html>
