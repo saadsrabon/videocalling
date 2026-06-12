@@ -151,6 +151,12 @@ export type MeetingClientEvent =
   | { type: "media-syncing" }
   | { type: "media-ready" }
   | {
+      type: "local-media-fallback";
+      hasVideo: boolean;
+      hasAudio: boolean;
+      message: string;
+    }
+  | {
       type: "joined";
       roomId: string;
       participants: string[];

@@ -152,23 +152,60 @@ function describeTrack(track: MediaStreamTrack): Record<string, unknown> {
 const MEDIA_PORT_HINT =
   "Open UDP/TCP ports 40000–40100 on the video server (AWS security group) for SFU media.";
 
+async function getUserMediaOnce(
+  constraints: MediaStreamConstraints,
+  timeoutMs = 12000,
+): Promise<MediaStream> {
+  const request = navigator.mediaDevices.getUserMedia(constraints);
+
+  if (timeoutMs <= 0) {
+    return request;
+  }
+
+  let timer: ReturnType<typeof setTimeout> | undefined;
+
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => {
+      reject(new DOMException("Device open timed out", "AbortError"));
+    }, timeoutMs);
+  });
+
+  try {
+    return await Promise.race([request, timeout]);
+  } finally {
+    if (timer) {
+      clearTimeout(timer);
+    }
+  }
+}
+
+export type LocalMediaResult = {
+  stream: MediaStream;
+  hasVideo: boolean;
+  hasAudio: boolean;
+};
+
 async function getUserMediaWithRetry(
   log: (message: string, data?: Record<string, unknown>) => void,
-): Promise<MediaStream> {
+): Promise<LocalMediaResult> {
   if (!navigator.mediaDevices?.getUserMedia) {
     throw new Error("Camera/mic API not available — use HTTPS and a supported browser");
+  }
+
+  try {
+    await navigator.mediaDevices.enumerateDevices();
+  } catch {
+    /* optional warm-up */
   }
 
   const attempts: MediaStreamConstraints[] = [
     { audio: true, video: true },
     {
       audio: true,
-      video: { width: { ideal: 1280 }, height: { ideal: 720 }, frameRate: { ideal: 24 } },
-    },
-    {
-      audio: true,
       video: { width: { ideal: 640 }, height: { ideal: 480 }, frameRate: { ideal: 24 } },
     },
+    { audio: true, video: { width: { max: 320 }, height: { max: 240 } } },
+    { audio: true, video: false },
   ];
 
   let lastError: unknown;
@@ -178,13 +215,23 @@ async function getUserMediaWithRetry(
 
     try {
       log("requesting getUserMedia", { attempt: attempt + 1, constraints });
-      const stream = await navigator.mediaDevices.getUserMedia(constraints);
+      const stream = await getUserMediaOnce(constraints);
+      const hasVideo = stream.getVideoTracks().length > 0;
+      const hasAudio = stream.getAudioTracks().length > 0;
+
+      if (!hasVideo && !hasAudio) {
+        throw new Error("No media tracks returned");
+      }
+
       log("getUserMedia succeeded", {
         attempt: attempt + 1,
+        hasVideo,
+        hasAudio,
         video: stream.getVideoTracks().map((track) => describeTrack(track)),
         audio: stream.getAudioTracks().map((track) => describeTrack(track)),
       });
-      return stream;
+
+      return { stream, hasVideo, hasAudio };
     } catch (error) {
       lastError = error;
       const name = error instanceof DOMException ? error.name : "Error";
@@ -196,14 +243,49 @@ async function getUserMediaWithRetry(
       }
 
       if (attempt < attempts.length - 1) {
-        await new Promise((resolve) => setTimeout(resolve, 400));
+        await new Promise((resolve) => setTimeout(resolve, 600 * (attempt + 1)));
       }
     }
   }
 
+  log("trying split audio/video acquisition");
+  const tracks: MediaStreamTrack[] = [];
+  let gotAudio = false;
+  let gotVideo = false;
+
+  try {
+    const audioStream = await getUserMediaOnce({ audio: true, video: false }, 8000);
+    for (const track of audioStream.getAudioTracks()) {
+      tracks.push(track);
+    }
+    gotAudio = tracks.some((track) => track.kind === "audio");
+  } catch (error) {
+    log("split audio failed", {
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
+
+  try {
+    const videoStream = await getUserMediaOnce({ audio: false, video: true }, 8000);
+    for (const track of videoStream.getVideoTracks()) {
+      tracks.push(track);
+    }
+    gotVideo = tracks.some((track) => track.kind === "video");
+  } catch (error) {
+    log("split video failed", {
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
+
+  if (tracks.length > 0) {
+    const stream = new MediaStream(tracks);
+    log("getUserMedia split succeeded", { hasVideo: gotVideo, hasAudio: gotAudio });
+    return { stream, hasVideo: gotVideo, hasAudio: gotAudio };
+  }
+
   if (lastError instanceof DOMException && lastError.name === "AbortError") {
     throw new Error(
-      `Camera timed out (${lastError.message}). Close other apps using the camera and try again.`,
+      "Camera timed out — close other apps/tabs using the camera, then reload and try again.",
     );
   }
 
@@ -867,6 +949,34 @@ export class MeetingClient {
     return this.recvTransportConnected;
   }
 
+  private async acquireLocalMedia(): Promise<void> {
+    const result = await getUserMediaWithRetry((message, data) =>
+      this.log(message, data),
+    );
+
+    this.localStream = result.stream;
+
+    if (!result.hasVideo) {
+      this.cameraOff = true;
+      this.emit({
+        type: "local-media-fallback",
+        hasVideo: false,
+        hasAudio: result.hasAudio,
+        message: result.hasAudio
+          ? "Camera unavailable — joined with microphone only"
+          : "No camera or microphone available",
+      });
+    } else if (!result.hasAudio) {
+      this.micMuted = true;
+      this.emit({
+        type: "local-media-fallback",
+        hasVideo: true,
+        hasAudio: false,
+        message: "Microphone unavailable — joined with camera only",
+      });
+    }
+  }
+
   private watchTransportState(direction: "send" | "recv", transport: Transport): void {
     transport.on("connectionstatechange", (state) => {
       this.log(`${direction} transport connection state`, { state });
@@ -925,9 +1035,7 @@ export class MeetingClient {
     this.log(this.ghostMode ? "ghost observer joining (no publish)" : "acquiring camera/mic after admission");
 
     if (!this.ghostMode) {
-      this.localStream = await getUserMediaWithRetry((message, data) =>
-        this.log(message, data),
-      );
+      await this.acquireLocalMedia();
     }
 
     const iceResponse = await fetch(`${baseUrl}/v1/ice-servers`, { headers });
@@ -1067,9 +1175,7 @@ export class MeetingClient {
     }
 
     if (!this.ghostMode && !this.localStream) {
-      this.localStream = await getUserMediaWithRetry((message, data) =>
-        this.log(message, data),
-      );
+      await this.acquireLocalMedia();
     }
 
     await this.startMediasoupSession();
@@ -1417,10 +1523,12 @@ export class MeetingClient {
   }
 
   private async startLocalMedia(): Promise<void> {
+    if (!this.localStream && !this.ghostMode) {
+      await this.acquireLocalMedia();
+    }
+
     if (!this.localStream) {
-      this.localStream = await getUserMediaWithRetry((message, data) =>
-        this.log(message, data),
-      );
+      return;
     }
 
     const audioTrack = this.localStream.getAudioTracks()[0];
