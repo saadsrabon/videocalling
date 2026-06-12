@@ -75,7 +75,7 @@ export class RoomService {
     return this.getHostUserId(roomId) === userId;
   }
 
-  join(roomId: string, userId: string, displayName?: string) {
+  join(roomId: string, userId: string, displayName?: string, options?: { ghost?: boolean }) {
     const room = this.store.get(roomId);
 
     if (!room) {
@@ -104,17 +104,35 @@ export class RoomService {
       };
     }
 
-    return this.joinSfuMeeting(room, userId, displayName);
+    return this.joinSfuMeeting(room, userId, displayName, options);
   }
 
   private joinSfuMeeting(
     room: NonNullable<ReturnType<RoomStore["get"]>>,
     userId: string,
     displayName?: string,
+    options?: { ghost?: boolean },
   ) {
     const roomId = room.id;
     const alreadyAdmitted = room.participants.has(userId);
     const alreadyWaiting = room.waitingParticipants.has(userId);
+
+    if (options?.ghost) {
+      this.store.addParticipant(roomId, userId, displayName ?? "Observer", {
+        ghost: true,
+      });
+
+      return {
+        roomId,
+        mode: room.mode,
+        code: room.code,
+        status: "admitted" as JoinStatus,
+        hostUserId: room.createdBy ?? null,
+        participants: this.getParticipantRoster(roomId),
+        alreadyJoined: alreadyAdmitted,
+        ghost: true,
+      };
+    }
 
     if (alreadyAdmitted) {
       return {
@@ -175,9 +193,22 @@ export class RoomService {
     };
   }
 
-  joinMeetingByCode(code: string, userId: string, displayName?: string) {
+  joinMeetingByCode(
+    code: string,
+    userId: string,
+    displayName?: string,
+    options?: { ghost?: boolean },
+  ) {
     const meeting = this.getMeetingByCode(code);
-    return this.join(meeting.roomId, userId, displayName);
+    return this.join(meeting.roomId, userId, displayName, options);
+  }
+
+  listActiveMeetings() {
+    return this.store.listSfuMeetings().map((meeting) => ({
+      ...meeting,
+      createdAt: meeting.createdAt.toISOString(),
+      maxParticipants: this.maxSfuPeers,
+    }));
   }
 
   admitParticipant(roomId: string, hostUserId: string, targetUserId: string) {
@@ -230,7 +261,14 @@ export class RoomService {
   }
 
   getParticipantRoster(roomId: string): ParticipantInfo[] {
-    return this.store.listParticipants(roomId).map(toParticipantInfo);
+    return this.store
+      .listParticipants(roomId)
+      .filter((participant) => !participant.ghost)
+      .map(toParticipantInfo);
+  }
+
+  isGhostParticipant(roomId: string, userId: string): boolean {
+    return this.store.getParticipant(roomId, userId)?.ghost === true;
   }
 
   getDisplayName(roomId: string, userId: string): string {
@@ -249,6 +287,10 @@ export class RoomService {
 
   isParticipant(roomId: string, userId: string): boolean {
     return this.store.hasParticipant(roomId, userId);
+  }
+
+  canUseSignaling(roomId: string, userId: string): boolean {
+    return this.isParticipant(roomId, userId);
   }
 
   isWaiting(roomId: string, userId: string): boolean {

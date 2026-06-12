@@ -27,7 +27,29 @@ function checkGuestRateLimit(ip: string): boolean {
   return true;
 }
 
+function isSuperAdmin(user: { metadata?: Record<string, unknown> }): boolean {
+  return user.metadata?.adminRole === "SUPER_ADMIN";
+}
+
 const plugin: FastifyPluginAsync = async (app) => {
+  app.get(
+    "/v1/meetings",
+    { preHandler: requireAuth },
+    async (request, reply) => {
+      if (!isSuperAdmin(request.user)) {
+        return reply.code(403).send({
+          error: "forbidden",
+          message: "Only SUPER_ADMIN can list active meetings",
+        });
+      }
+
+      return {
+        meetings: app.roomService.listActiveMeetings(),
+        maxParticipants: config.sfuMaxPeers,
+      };
+    },
+  );
+
   app.post(
     "/v1/meetings",
     { preHandler: requireAuth },
@@ -106,7 +128,18 @@ const plugin: FastifyPluginAsync = async (app) => {
     { preHandler: requireAuth },
     async (request, reply) => {
       const { code } = request.params as { code: string };
-      const body = (request.body ?? {}) as { displayName?: string };
+      const body = (request.body ?? {}) as {
+        displayName?: string;
+        ghost?: boolean;
+      };
+
+      if (body.ghost && !isSuperAdmin(request.user)) {
+        return reply.code(403).send({
+          error: "forbidden",
+          message: "Ghost mode requires SUPER_ADMIN",
+        });
+      }
+
       const displayName =
         body.displayName?.trim() ||
         (typeof request.user.metadata?.name === "string"
@@ -120,7 +153,8 @@ const plugin: FastifyPluginAsync = async (app) => {
         return app.roomService.joinMeetingByCode(
           code,
           request.user.userId,
-          displayName,
+          body.ghost ? displayName ?? "Observer" : displayName,
+          { ghost: body.ghost === true },
         );
       } catch (error) {
         if (error instanceof RoomError) {

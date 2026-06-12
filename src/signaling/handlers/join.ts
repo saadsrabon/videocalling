@@ -66,15 +66,19 @@ export async function handleJoin(
 
   const participantCount = ctx.roomService.listParticipantIds(roomId).length;
 
-  if (roomMode === "sfu") {
+  if (roomMode === "sfu" && ctx.roomService.isGhostParticipant(roomId, ctx.user.userId)) {
+    ctx.sfuService.resetPeerForRejoin(roomId, ctx.user.userId);
+    await ctx.sfuService.joinPeer(roomId, ctx.user.userId, participantCount);
+  } else if (roomMode === "sfu") {
     ctx.sfuService.resetPeerForRejoin(roomId, ctx.user.userId);
     await ctx.sfuService.joinPeer(roomId, ctx.user.userId, participantCount);
   }
-
   const roster = ctx.roomService.getParticipantRoster(roomId);
   const participants = roster
     .map((participant) => participant.userId)
     .filter((id) => id !== ctx.user.userId);
+
+  const isGhost = ctx.roomService.isGhostParticipant(roomId, ctx.user.userId);
 
   sendMessage(ctx.send, {
     type: "joined",
@@ -83,8 +87,13 @@ export async function handleJoin(
     roster,
     hostUserId: ctx.roomService.getHostUserId(roomId),
     mode: roomMode,
+    ghost: isGhost,
     v: SIGNALING_VERSION,
   });
+
+  if (isGhost) {
+    return;
+  }
 
   for (const participant of roster) {
     if (participant.userId === ctx.user.userId) {

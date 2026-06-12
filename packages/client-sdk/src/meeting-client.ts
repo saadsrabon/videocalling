@@ -217,6 +217,8 @@ export class MeetingClient {
   private readonly token: string;
   private readonly code: string;
   private readonly displayName?: string;
+  private readonly ghostMode: boolean;
+  private recvTransportConnected: Promise<void> | null = null;
   private readonly handlers = new Set<MeetingClientEventHandler>();
 
   private ws: WebSocket | null = null;
@@ -262,6 +264,11 @@ export class MeetingClient {
     this.token = normalizeToken(options.token);
     this.code = options.code.trim().toUpperCase();
     this.displayName = options.displayName?.trim() || undefined;
+    this.ghostMode = options.ghostMode === true;
+  }
+
+  get isGhostMode(): boolean {
+    return this.ghostMode;
   }
 
   get userId(): string {
@@ -495,7 +502,7 @@ export class MeetingClient {
     );
   }
 
-  /** Re-fetch and consume all remote producers (after reconnect or missed tracks). */
+  /** Re-fetch and consume missing remote producers (after reconnect or missed tracks). */
   async resyncRemoteMedia(): Promise<void> {
     if (!this.mediaSessionReady || this.closed) {
       return;
@@ -509,14 +516,23 @@ export class MeetingClient {
     this.emit({ type: "media-syncing" });
 
     try {
-      for (const producerId of [...this.remoteTracks.keys()]) {
-        this.removeProducerTrack(producerId);
-      }
+      await this.waitForRecvTransportConnected();
 
       const existingProducers = await this.listExistingProducers();
-      this.log("resync remote media", { count: existingProducers.length });
+      const missing = existingProducers.filter(
+        (producer) => !this.remoteTracks.has(producer.producerId),
+      );
 
-      for (const producer of existingProducers) {
+      this.log("resync remote media", {
+        total: existingProducers.length,
+        missing: missing.length,
+      });
+
+      if (missing.length === 0) {
+        return;
+      }
+
+      for (const producer of missing) {
         await this.consumeRemoteProducerWithRetry(
           producer.peerId,
           producer.producerId,
@@ -805,6 +821,52 @@ export class MeetingClient {
     });
   }
 
+  private waitForRecvTransportConnected(timeoutMs = 15000): Promise<void> {
+    if (!this.recvTransport) {
+      return Promise.resolve();
+    }
+
+    if (this.recvTransport.connectionState === "connected") {
+      return Promise.resolve();
+    }
+
+    if (!this.recvTransportConnected) {
+      this.recvTransportConnected = new Promise((resolve, reject) => {
+        const transport = this.recvTransport!;
+
+        const timeout = window.setTimeout(() => {
+          cleanup();
+          reject(new Error("Receive transport connection timed out"));
+        }, timeoutMs);
+
+        const onStateChange = (state: string) => {
+          if (state === "connected") {
+            cleanup();
+            resolve();
+          } else if (state === "failed" || state === "closed") {
+            cleanup();
+            reject(new Error(`Receive transport ${state}`));
+          }
+        };
+
+        const cleanup = () => {
+          window.clearTimeout(timeout);
+          transport.off("connectionstatechange", onStateChange);
+          this.recvTransportConnected = null;
+        };
+
+        transport.on("connectionstatechange", onStateChange);
+
+        if (transport.connectionState === "connected") {
+          cleanup();
+          resolve();
+        }
+      });
+    }
+
+    return this.recvTransportConnected;
+  }
+
   private watchTransportState(direction: "send" | "recv", transport: Transport): void {
     transport.on("connectionstatechange", (state) => {
       this.log(`${direction} transport connection state`, { state });
@@ -860,10 +922,13 @@ export class MeetingClient {
       await this.waitForJoined();
     }
 
-    this.log("acquiring camera/mic after admission");
-    this.localStream = await getUserMediaWithRetry((message, data) =>
-      this.log(message, data),
-    );
+    this.log(this.ghostMode ? "ghost observer joining (no publish)" : "acquiring camera/mic after admission");
+
+    if (!this.ghostMode) {
+      this.localStream = await getUserMediaWithRetry((message, data) =>
+        this.log(message, data),
+      );
+    }
 
     const iceResponse = await fetch(`${baseUrl}/v1/ice-servers`, { headers });
     if (!iceResponse.ok) {
@@ -885,9 +950,10 @@ export class MeetingClient {
       {
         method: "POST",
         ...jsonPostInit(this.token),
-        body: JSON.stringify(
-          this.displayName ? { displayName: this.displayName } : {},
-        ),
+        body: JSON.stringify({
+          ...(this.displayName ? { displayName: this.displayName } : {}),
+          ...(this.ghostMode ? { ghost: true } : {}),
+        }),
       },
     );
 
@@ -1000,7 +1066,7 @@ export class MeetingClient {
       await this.waitForJoined();
     }
 
-    if (!this.localStream) {
+    if (!this.ghostMode && !this.localStream) {
       this.localStream = await getUserMediaWithRetry((message, data) =>
         this.log(message, data),
       );
@@ -1083,9 +1149,15 @@ export class MeetingClient {
       routerRtpCapabilities: capsMessage.rtpCapabilities as never,
     });
 
-    await this.createSendTransport();
-    await this.createRecvTransport();
-    await this.startLocalMedia();
+    if (this.ghostMode) {
+      await this.createRecvTransport();
+      await this.waitForRecvTransportConnected();
+    } else {
+      await this.createSendTransport();
+      await this.createRecvTransport();
+      await this.waitForRecvTransportConnected();
+      await this.startLocalMedia();
+    }
 
     const existingProducers = await this.listExistingProducers();
     this.log("existing producers in room", {

@@ -71,6 +71,7 @@ export class InMemoryRoomStore implements RoomStore {
     roomId: string,
     userId: string,
     displayName?: string,
+    options?: { ghost?: boolean },
   ): Room | null {
     const room = this.rooms.get(roomId);
 
@@ -78,7 +79,15 @@ export class InMemoryRoomStore implements RoomStore {
       return null;
     }
 
-    if (room.participants.has(userId)) {
+    const existing = room.participants.get(userId);
+
+    if (existing) {
+      if (displayName) {
+        existing.displayName = displayName;
+      }
+      if (options?.ghost) {
+        existing.ghost = true;
+      }
       return room;
     }
 
@@ -86,6 +95,7 @@ export class InMemoryRoomStore implements RoomStore {
       userId,
       joinedAt: new Date(),
       displayName,
+      ghost: options?.ghost,
     });
 
     return room;
@@ -222,6 +232,66 @@ export class InMemoryRoomStore implements RoomStore {
       return 0;
     }
 
-    return room.participants.size;
+    let count = 0;
+
+    for (const participant of room.participants.values()) {
+      if (!participant.ghost) {
+        count += 1;
+      }
+    }
+
+    return count;
+  }
+
+  listSfuMeetings(): Array<{
+    roomId: string;
+    code: string;
+    title?: string;
+    hostUserId?: string;
+    createdAt: Date;
+    participantCount: number;
+    waitingCount: number;
+  }> {
+    const meetings: Array<{
+      roomId: string;
+      code: string;
+      title?: string;
+      hostUserId?: string;
+      createdAt: Date;
+      participantCount: number;
+      waitingCount: number;
+    }> = [];
+
+    for (const room of this.rooms.values()) {
+      if (room.mode !== "sfu" || !room.code) {
+        continue;
+      }
+
+      if (room.expiresAt && room.expiresAt.getTime() < Date.now()) {
+        continue;
+      }
+
+      let participantCount = 0;
+
+      for (const participant of room.participants.values()) {
+        if (!participant.ghost) {
+          participantCount += 1;
+        }
+      }
+
+      meetings.push({
+        roomId: room.id,
+        code: room.code,
+        title: room.title,
+        hostUserId: room.createdBy,
+        createdAt: room.createdAt,
+        participantCount,
+        waitingCount: room.waitingParticipants.size,
+      });
+    }
+
+    return meetings.sort(
+      (a, b) => b.createdAt.getTime() - a.createdAt.getTime(),
+    );
   }
 }

@@ -35,7 +35,7 @@ function assertGuestRoomAccess(user: AuthUser, roomId: string): boolean {
 }
 
 function assertInRoom(ctx: SignalingContext, roomId: string): boolean {
-  if (!ctx.roomService.isParticipant(roomId, ctx.user.userId)) {
+  if (!ctx.roomService.canUseSignaling(roomId, ctx.user.userId)) {
     sendMessage(ctx.send, {
       type: "error",
       code: "not_in_room",
@@ -113,6 +113,19 @@ export async function handleSfuMessage(
       }
 
       case "sfu.createTransport": {
+        if (
+          message.direction === "send" &&
+          ctx.roomService.isGhostParticipant(roomId, ctx.user.userId)
+        ) {
+          sendSfuError(
+            ctx,
+            requestId,
+            "ghost_readonly",
+            "Ghost observers cannot create send transport",
+          );
+          break;
+        }
+
         const transport = await ctx.sfuService.createWebRtcTransport(
           roomId,
           ctx.user.userId,
@@ -146,6 +159,16 @@ export async function handleSfuMessage(
       }
 
       case "sfu.produce": {
+        if (ctx.roomService.isGhostParticipant(roomId, ctx.user.userId)) {
+          sendSfuError(
+            ctx,
+            requestId,
+            "ghost_readonly",
+            "Ghost observers cannot publish media",
+          );
+          break;
+        }
+
         const result = await ctx.sfuService.produce(
           roomId,
           ctx.user.userId,

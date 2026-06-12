@@ -292,6 +292,8 @@ export type ServerMessage =
 
       mode?: "p2p" | "sfu";
 
+      ghost?: boolean;
+
       v: number;
 
     }

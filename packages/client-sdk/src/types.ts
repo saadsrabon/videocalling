@@ -102,6 +102,23 @@ export interface MeetingJoinResponse {
   hostUserId: string | null;
   participants: ParticipantInfo[];
   alreadyJoined: boolean;
+  ghost?: boolean;
+}
+
+export interface ActiveMeetingSummary {
+  roomId: string;
+  code: string;
+  title?: string;
+  hostUserId?: string;
+  createdAt: string;
+  participantCount: number;
+  waitingCount: number;
+  maxParticipants: number;
+}
+
+export interface ActiveMeetingsResponse {
+  meetings: ActiveMeetingSummary[];
+  maxParticipants: number;
 }
 
 export interface GuestTokenResponse {
@@ -118,6 +135,8 @@ export interface MeetingClientJoinOptions {
   /** Meeting join code */
   code: string;
   displayName?: string;
+  /** SUPER_ADMIN observer — listen/watch only, invisible to others. */
+  ghostMode?: boolean;
 }
 
 export type MediaSource = "camera" | "screen";

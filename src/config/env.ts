@@ -284,7 +284,7 @@ export const config: AppConfig = {
     40000,
     "MEDIASOUP_PORT",
   ),
-  sfuMaxPeers: parsePositiveInt(process.env.SFU_MAX_PEERS, 6, "SFU_MAX_PEERS"),
+  sfuMaxPeers: parsePositiveInt(process.env.SFU_MAX_PEERS, 10, "SFU_MAX_PEERS"),
   meetingBaseUrl: parseMeetingBaseUrl(process.env.MEETING_BASE_URL),
   guestJwtTtlSeconds: parsePositiveInt(
     process.env.GUEST_JWT_TTL_SECONDS,

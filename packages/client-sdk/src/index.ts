@@ -13,6 +13,8 @@ export type {
   MeetingCreateResponse,
   MeetingJoinResponse,
   MeetingJoinStatus,
+  ActiveMeetingSummary,
+  ActiveMeetingsResponse,
   ParticipantInfo,
   RoomCreateResponse,
   RoomJoinResponse,

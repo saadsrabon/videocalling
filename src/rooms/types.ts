@@ -6,6 +6,8 @@ export interface RoomParticipant {
   userId: string;
   joinedAt: Date;
   displayName?: string;
+  /** Invisible observer — excluded from roster and room capacity. */
+  ghost?: boolean;
 }
 
 export interface ParticipantInfo {
@@ -31,7 +33,12 @@ export interface RoomStore {
   create(options?: { mode?: RoomMode; createdBy?: string; title?: string; code?: string }): Room;
   get(roomId: string): Room | undefined;
   getByCode(code: string): Room | undefined;
-  addParticipant(roomId: string, userId: string, displayName?: string): Room | null;
+  addParticipant(
+    roomId: string,
+    userId: string,
+    displayName?: string,
+    options?: { ghost?: boolean },
+  ): Room | null;
   addWaitingParticipant(roomId: string, userId: string, displayName?: string): Room | null;
   admitWaitingParticipant(roomId: string, userId: string): Room | null;
   removeParticipant(roomId: string, userId: string): boolean;
@@ -45,6 +52,16 @@ export interface RoomStore {
   listParticipants(roomId: string): RoomParticipant[];
   listWaitingParticipants(roomId: string): RoomParticipant[];
   countParticipants(roomId: string): number;
+  /** SFU meetings currently active in memory. */
+  listSfuMeetings(): Array<{
+    roomId: string;
+    code: string;
+    title?: string;
+    hostUserId?: string;
+    createdAt: Date;
+    participantCount: number;
+    waitingCount: number;
+  }>;
 }
 
 export type RoomErrorCode =
