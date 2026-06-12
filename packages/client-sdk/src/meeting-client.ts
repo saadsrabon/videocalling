@@ -945,6 +945,7 @@ export class MeetingClient {
     }
 
     if (this.reconnectAttempts >= this.maxReconnectAttempts) {
+      this.closed = true;
       this.emitConnectionState("disconnected", "Connection lost");
       this.emit({ type: "error", message: "Connection lost — please reload the page" });
       return;
@@ -984,6 +985,7 @@ export class MeetingClient {
     const headers = authHeaders(this.token);
     const joinResult = await this.httpJoin(this.serverUrl, headers);
     this.roomId = joinResult.roomId;
+    this.hostUserId = joinResult.hostUserId;
     this.joinStatus = joinResult.status;
     this.updateRoster(joinResult.participants);
 
@@ -1152,8 +1154,55 @@ export class MeetingClient {
     }));
   }
 
-  private async consumeProducer(_peerId: string, _userId: string): Promise<void> {
-    /* producers arrive via sfu.newProducer or sfu.listProducers */
+  private async syncPeerMedia(peerId: string): Promise<void> {
+    if (!this.mediaSessionReady) {
+      return;
+    }
+
+    const producers = (await this.listExistingProducers()).filter(
+      (producer) => producer.peerId === peerId,
+    );
+
+    for (const producer of producers) {
+      await this.consumeRemoteProducerWithRetry(
+        producer.peerId,
+        producer.producerId,
+        producer.kind,
+        producer.source,
+      );
+    }
+  }
+
+  private async consumeRemoteProducerWithRetry(
+    peerId: string,
+    producerId: string,
+    kind: "audio" | "video",
+    source: MediaSource,
+    maxAttempts = 3,
+  ): Promise<void> {
+    let lastError: unknown;
+
+    for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+      try {
+        await this.consumeRemoteProducer(peerId, producerId, kind, source);
+        return;
+      } catch (error) {
+        lastError = error;
+        this.log("consume retry", {
+          producerId,
+          attempt,
+          error: error instanceof Error ? error.message : String(error),
+        });
+
+        if (attempt < maxAttempts) {
+          await new Promise((resolve) => setTimeout(resolve, 300 * attempt));
+        }
+      }
+    }
+
+    throw lastError instanceof Error
+      ? lastError
+      : new Error("Consume failed after retries");
   }
 
   private async createSendTransport(): Promise<void> {
