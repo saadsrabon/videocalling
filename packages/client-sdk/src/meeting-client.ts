@@ -216,6 +216,7 @@ export class MeetingClient {
   private readonly serverUrl: string;
   private readonly token: string;
   private readonly code: string;
+  private readonly displayName?: string;
   private readonly handlers = new Set<MeetingClientEventHandler>();
 
   private ws: WebSocket | null = null;
@@ -260,6 +261,7 @@ export class MeetingClient {
     this.serverUrl = normalizeServerUrl(options.serverUrl);
     this.token = normalizeToken(options.token);
     this.code = options.code.trim().toUpperCase();
+    this.displayName = options.displayName?.trim() || undefined;
   }
 
   get userId(): string {
@@ -735,12 +737,7 @@ export class MeetingClient {
           userId: message.userId,
           displayName: message.displayName,
         });
-        void this.syncPeerMedia(message.userId).catch((error) => {
-          this.log("sync peer media failed", {
-            peerId: message.userId,
-            error: error instanceof Error ? error.message : String(error),
-          });
-        });
+        this.schedulePeerMediaSync(message.userId);
         break;
       case "sfu.peerLeft":
         this.removePeerTracks(message.peerId);
@@ -888,6 +885,9 @@ export class MeetingClient {
       {
         method: "POST",
         ...jsonPostInit(this.token),
+        body: JSON.stringify(
+          this.displayName ? { displayName: this.displayName } : {},
+        ),
       },
     );
 
@@ -900,7 +900,10 @@ export class MeetingClient {
             ...headers,
             "Content-Type": "application/json",
           },
-          body: JSON.stringify({ token: this.token }),
+          body: JSON.stringify({
+            token: this.token,
+            ...(this.displayName ? { displayName: this.displayName } : {}),
+          }),
         },
       );
 
@@ -1103,6 +1106,35 @@ export class MeetingClient {
     this.mediaSessionReady = true;
     this.log("mediasoup session ready", { userId: this._userId, roomId: this.roomId });
     this.emit({ type: "media-ready" });
+    this.scheduleDelayedResync();
+  }
+
+  private scheduleDelayedResync(): void {
+    for (const delayMs of [1500, 4000]) {
+      window.setTimeout(() => {
+        if (!this.closed && this.mediaSessionReady) {
+          void this.resyncRemoteMedia();
+        }
+      }, delayMs);
+    }
+  }
+
+  private schedulePeerMediaSync(peerId: string): void {
+    for (const delayMs of [0, 800, 2000, 4500]) {
+      window.setTimeout(() => {
+        if (this.closed || !this.mediaSessionReady) {
+          return;
+        }
+
+        void this.syncPeerMedia(peerId).catch((error) => {
+          this.log("sync peer media failed", {
+            peerId,
+            delayMs,
+            error: error instanceof Error ? error.message : String(error),
+          });
+        });
+      }, delayMs);
+    }
   }
 
   private async flushPendingConsumes(): Promise<void> {

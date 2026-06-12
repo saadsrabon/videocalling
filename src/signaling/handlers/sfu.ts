@@ -251,6 +251,10 @@ export function broadcastSfuEvent(
 
   for (const participantId of participants) {
     if (event.type === "newProducer") {
+      if (participantId === event.peerId) {
+        continue;
+      }
+
       ctx.registry.sendToUser(
         participantId,
         JSON.stringify({

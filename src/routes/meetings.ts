@@ -106,10 +106,15 @@ const plugin: FastifyPluginAsync = async (app) => {
     { preHandler: requireAuth },
     async (request, reply) => {
       const { code } = request.params as { code: string };
+      const body = (request.body ?? {}) as { displayName?: string };
       const displayName =
-        typeof request.user.metadata?.name === "string"
+        body.displayName?.trim() ||
+        (typeof request.user.metadata?.name === "string"
           ? request.user.metadata.name
-          : undefined;
+          : undefined) ||
+        (typeof request.user.metadata?.email === "string"
+          ? request.user.metadata.email.split("@")[0]
+          : undefined);
 
       try {
         return app.roomService.joinMeetingByCode(
@@ -203,7 +208,11 @@ const plugin: FastifyPluginAsync = async (app) => {
 
   app.post("/v1/meetings/:code/guest-join", async (request, reply) => {
     const { code } = request.params as { code: string };
-    const body = (request.body ?? {}) as { name?: string; token?: string };
+    const body = (request.body ?? {}) as {
+      name?: string;
+      token?: string;
+      displayName?: string;
+    };
 
     if (!body.token) {
       return reply.code(400).send({
@@ -225,12 +234,19 @@ const plugin: FastifyPluginAsync = async (app) => {
     }
 
     try {
+      const displayName =
+        body.displayName?.trim() ||
+        (typeof authResult.user.metadata?.name === "string"
+          ? authResult.user.metadata.name
+          : undefined) ||
+        (typeof authResult.user.metadata?.email === "string"
+          ? authResult.user.metadata.email.split("@")[0]
+          : undefined);
+
       return app.roomService.joinMeetingByCode(
         code,
         authResult.user.userId,
-        typeof authResult.user.metadata?.name === "string"
-          ? authResult.user.metadata.name
-          : undefined,
+        displayName,
       );
     } catch (error) {
       if (error instanceof RoomError) {
