@@ -2,7 +2,7 @@
 
 > Learn this project by reading files in a deliberate order — from bootstrap to WebRTC demo.
 >
-> **Last updated:** 2026-06-11
+> **Last updated:** 2026-06-12
 
 ---
 
@@ -369,6 +369,8 @@ Quick lookup table when you know *what* you want but not *where* it is.
 | `handlers/sdp.ts` | Offer/answer relay + validation |
 | `handlers/ice-candidate.ts` | ICE relay + validation |
 | `handlers/sfu.ts` | SFU signaling (`sfu.*` messages) |
+| `handlers/lobby.ts` | Host admit/deny waiting room (`lobby.*`) |
+| `handlers/meeting-chat.ts` | In-meeting chat relay (`meeting.chat.*`) |
 | `handlers/call.ts` | Staff 1:1 call invite relay |
 
 ---
@@ -377,13 +379,15 @@ Quick lookup table when you know *what* you want but not *where* it is.
 
 1. Staff `POST /v1/meetings` → [`src/routes/meetings.ts`](../src/routes/meetings.ts) → `RoomService.createMeeting` (mode `sfu`, 8-char code).
 2. Guest `POST /v1/meetings/:code/guest-token` → short-lived JWT with `role: guest` + `roomId`.
-3. Client `POST /v1/meetings/:code/join` (staff) or `guest-join` (guest) → HTTP room membership.
-4. WS `join { roomId }` → [`handlers/join.ts`](../src/signaling/handlers/join.ts) → `sfuService.joinPeer`.
-5. Client sends `sfu.getRtpCapabilities` → `sfu.createTransport` (send + recv) → `sfu.produce` / `sfu.consume`.
-6. RTP flows UDP/TCP to mediasoup on `MEDIASOUP_PORT` (not through nginx).
-7. On disconnect → `handlePeerDisconnect` → `sfuService.removePeer` → `sfu.peerLeft` broadcast.
+3. Client `POST /v1/meetings/:code/join` (staff) or `guest-join` (guest) → HTTP join returns `status: admitted | waiting` + roster.
+4. WS `join { roomId }` → [`handlers/join.ts`](../src/signaling/handlers/join.ts) — waiting users get `lobby.waiting`; admitted users enter SFU via `sfuService.joinPeer`.
+5. Host `lobby.admit` → [`handlers/lobby.ts`](../src/signaling/handlers/lobby.ts) → waiter gets `lobby.admitted` then starts mediasoup.
+6. Client sends `sfu.getRtpCapabilities` → `sfu.createTransport` (send + recv) → `sfu.produce` / `sfu.consume`.
+7. Chat: `meeting.chat.send` → [`handlers/meeting-chat.ts`](../src/signaling/handlers/meeting-chat.ts) → broadcast `meeting.chat`.
+8. RTP flows UDP/TCP to mediasoup on `MEDIASOUP_PORT` (not through nginx).
+9. On disconnect → `handlePeerDisconnect` → `sfuService.removePeer` → `sfu.peerLeft` broadcast.
 
-Client: [`packages/client-sdk/src/meeting-client.ts`](../packages/client-sdk/src/meeting-client.ts) · Simfree UI: `apps/admin/src/components/meeting/MeetingRoom.tsx`.
+Client: [`packages/client-sdk/src/meeting-client.ts`](../packages/client-sdk/src/meeting-client.ts) · Simfree UI: `MeetingRoom.tsx`, `MeetingLobbyPanel.tsx`, `MeetingChatPanel.tsx`, `MeetingVideoGrid.tsx`.
 
 ### `src/routes/`
 
@@ -520,6 +524,8 @@ Knowing gaps helps you avoid searching for things that don't exist:
 |---------|--------|------------------------|
 | Redis room store | ❌ | `src/rooms/redis-room-store.ts` |
 | SFU group meetings (6 peers) | ✅ | `src/sfu/`, `MeetingClient`, `/v1/meetings` |
+| Meeting lobby (host admit) | ✅ | `handlers/lobby.ts`, `MeetingLobbyPanel` |
+| In-meeting chat | ✅ | `handlers/meeting-chat.ts`, `MeetingChatPanel` |
 | Screen share (meetings) | ✅ | `MeetingClient.startScreenShare` |
 | Virtual backgrounds | ✅ (client) | Simfree admin `virtual-background.ts` |
 | Recording | ❌ | separate service |

@@ -2,7 +2,7 @@
 
 > Run your **frontend app** on one host and this **video microservice** on another.
 >
-> **Last updated:** 2026-06-11
+> **Last updated:** 2026-06-12
 
 ---
 
@@ -56,9 +56,12 @@ Deploy this repository on its own machine (Linux recommended for mediasoup).
 ```bash
 git clone <your-repo-url> videocalling
 cd videocalling
-pnpm install
-pnpm run build
+npm ci
+node scripts/check-mediasoup-worker.mjs   # must exit 0 — SFU needs the binary
+npm run build
 ```
+
+**Note:** On Linux VPS, prefer **`npm ci`** over `pnpm install`. Recent pnpm versions may skip mediasoup’s `postinstall` (`ERR_PNPM_IGNORED_BUILDS`), leaving no `node_modules/mediasoup/worker/out/Release/mediasoup-worker`.
 
 Or use Docker (`Dockerfile` + `docker-compose.dev.yml` for local SFU testing; adapt for production).
 

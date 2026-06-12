@@ -12,10 +12,11 @@ echo "==> Pull latest"
 git pull --ff-only origin main
 
 echo "==> Install (this repo only)"
-pnpm install --frozen-lockfile
+npm ci
+node scripts/check-mediasoup-worker.mjs
 
 echo "==> Build"
-pnpm run build
+npm run build
 
 echo "==> Restart"
 pm2 restart videocalling

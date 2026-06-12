@@ -2,7 +2,7 @@
 
 > How to connect **any frontend** (React, Vue, Angular, plain HTML, mobile WebView) to the Video SDK backend.
 >
-> **Last updated:** 2026-06-11 · **API version:** `v1` · **Signaling version:** `1`
+> **Last updated:** 2026-06-12 · **API version:** `v1` · **Signaling version:** `1`
 
 ---
 
@@ -26,6 +26,8 @@ Use this table to jump to a section. **When you add a backend or SDK feature, ad
 | SFU group meetings (up to 6) | ✅ | [Group meetings (SFU)](#group-meetings-sfu) |
 | Meeting links + guest join | ✅ | [Group meetings (SFU)](#group-meetings-sfu) |
 | Screen share (meetings) | ✅ | [Group meetings (SFU)](#group-meetings-sfu) |
+| Meeting lobby (host admit) | ✅ | [Group meetings (SFU)](#group-meetings-sfu) |
+| In-meeting chat + emoji | ✅ | [Group meetings (SFU)](#group-meetings-sfu) |
 | Virtual backgrounds (client) | ✅ | [Virtual backgrounds](#virtual-backgrounds) |
 | Dev token endpoint | ✅ (dev only) | [Development helpers](#development-helpers) |
 | Recording | ❌ | — |
@@ -625,6 +627,40 @@ POST /v1/meetings/:code/guest-join
 Authorization: Bearer <guest-token>
 ```
 
+Join response includes `status`: `"admitted"` (meeting creator / already admitted) or `"waiting"` (guest or non-creator staff). `participants` is a roster array: `{ userId, displayName }[]`.
+
+### Host lobby (WebSocket)
+
+| Client → server | Who | Purpose |
+|-----------------|-----|---------|
+| `join` | everyone | After HTTP join; waiting users get `lobby.waiting` |
+| `lobby.admit` | host only | Move user from waiting → admitted + SFU |
+| `lobby.deny` | host only | Remove user from waiting room |
+| `lobby.list` | host only | List pending users |
+
+| Server → client | When |
+|-----------------|------|
+| `lobby.waiting` | User is in waiting room |
+| `lobby.request` | Host notified of new waiter |
+| `lobby.admitted` | User may start camera + SFU |
+| `lobby.denied` | Host declined join |
+
+Host = meeting creator (`createdBy` from `POST /v1/meetings`).
+
+```http
+GET /v1/meetings/:code/roster
+Authorization: Bearer <host-jwt>
+```
+
+Returns `{ admitted, waiting }` roster arrays.
+
+### In-meeting chat (WebSocket)
+
+| Message | Purpose |
+|---------|---------|
+| `meeting.chat.send` `{ roomId, text }` | Send chat (admitted only, max 500 chars) |
+| `meeting.chat` | Broadcast to all admitted participants |
+
 ### SDK — `MeetingClient`
 
 ```javascript
@@ -638,10 +674,23 @@ const client = await MeetingClient.join({
 });
 
 client.on((event) => {
+  if (event.type === "lobby-waiting") {
+    // Show waiting UI — no media yet
+  }
+  if (event.type === "lobby-request") {
+    // Host: event.userId, event.displayName — call client.admitParticipant()
+  }
   if (event.type === "track-added") {
     // event.peerId, event.kind, event.source ("camera" | "screen"), event.stream
   }
+  if (event.type === "chat-message") {
+    // event.displayName, event.text
+  }
 });
+
+client.admitParticipant(userId);
+client.denyParticipant(userId);
+client.sendChat("Hello 👋");
 
 await client.startScreenShare();
 await client.stopScreenShare();

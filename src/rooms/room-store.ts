@@ -1,5 +1,5 @@
 import { randomBytes, randomUUID } from "node:crypto";
-import type { Room, RoomStore } from "./types.js";
+import type { Room, RoomParticipant, RoomStore } from "./types.js";
 
 const CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
 
@@ -30,6 +30,7 @@ export class InMemoryRoomStore implements RoomStore {
       id: randomUUID(),
       createdAt: new Date(),
       participants: new Map(),
+      waitingParticipants: new Map(),
       mode: options?.mode ?? "p2p",
       code,
       createdBy: options?.createdBy,
@@ -90,6 +91,52 @@ export class InMemoryRoomStore implements RoomStore {
     return room;
   }
 
+  addWaitingParticipant(
+    roomId: string,
+    userId: string,
+    displayName?: string,
+  ): Room | null {
+    const room = this.rooms.get(roomId);
+
+    if (!room) {
+      return null;
+    }
+
+    if (room.waitingParticipants.has(userId) || room.participants.has(userId)) {
+      return room;
+    }
+
+    room.waitingParticipants.set(userId, {
+      userId,
+      joinedAt: new Date(),
+      displayName,
+    });
+
+    return room;
+  }
+
+  admitWaitingParticipant(roomId: string, userId: string): Room | null {
+    const room = this.rooms.get(roomId);
+
+    if (!room) {
+      return null;
+    }
+
+    const waiting = room.waitingParticipants.get(userId);
+
+    if (!waiting) {
+      return null;
+    }
+
+    room.waitingParticipants.delete(userId);
+
+    if (!room.participants.has(userId)) {
+      room.participants.set(userId, waiting);
+    }
+
+    return room;
+  }
+
   removeParticipant(roomId: string, userId: string): boolean {
     const room = this.rooms.get(roomId);
 
@@ -100,9 +147,24 @@ export class InMemoryRoomStore implements RoomStore {
     return room.participants.delete(userId);
   }
 
+  removeWaitingParticipant(roomId: string, userId: string): boolean {
+    const room = this.rooms.get(roomId);
+
+    if (!room) {
+      return false;
+    }
+
+    return room.waitingParticipants.delete(userId);
+  }
+
   hasParticipant(roomId: string, userId: string): boolean {
     const room = this.rooms.get(roomId);
     return room?.participants.has(userId) ?? false;
+  }
+
+  hasWaitingParticipant(roomId: string, userId: string): boolean {
+    const room = this.rooms.get(roomId);
+    return room?.waitingParticipants.has(userId) ?? false;
   }
 
   listParticipantIds(roomId: string): string[] {
@@ -113,6 +175,44 @@ export class InMemoryRoomStore implements RoomStore {
     }
 
     return [...room.participants.keys()];
+  }
+
+  listWaitingParticipantIds(roomId: string): string[] {
+    const room = this.rooms.get(roomId);
+
+    if (!room) {
+      return [];
+    }
+
+    return [...room.waitingParticipants.keys()];
+  }
+
+  getParticipant(roomId: string, userId: string): RoomParticipant | undefined {
+    return this.rooms.get(roomId)?.participants.get(userId);
+  }
+
+  getWaitingParticipant(roomId: string, userId: string): RoomParticipant | undefined {
+    return this.rooms.get(roomId)?.waitingParticipants.get(userId);
+  }
+
+  listParticipants(roomId: string): RoomParticipant[] {
+    const room = this.rooms.get(roomId);
+
+    if (!room) {
+      return [];
+    }
+
+    return [...room.participants.values()];
+  }
+
+  listWaitingParticipants(roomId: string): RoomParticipant[] {
+    const room = this.rooms.get(roomId);
+
+    if (!room) {
+      return [];
+    }
+
+    return [...room.waitingParticipants.values()];
   }
 
   countParticipants(roomId: string): number {

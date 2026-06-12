@@ -54,9 +54,10 @@ sudo TURN_SECRET="${TURN_SECRET}" EXTERNAL_IP="${PUBLIC_IP}" bash "$REPO_DIR/scr
 
 echo "==> Build videocalling (mediasoup native worker compiles on Linux)"
 cd "$REPO_DIR"
-corepack enable 2>/dev/null || true
-pnpm install --frozen-lockfile
-pnpm run build
+# Use npm ci on VPS — pnpm may skip mediasoup postinstall (ERR_PNPM_IGNORED_BUILDS).
+npm ci
+node scripts/check-mediasoup-worker.mjs
+npm run build
 
 echo "==> PM2"
 pm2 delete videocalling 2>/dev/null || true

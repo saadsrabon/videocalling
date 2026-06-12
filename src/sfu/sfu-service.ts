@@ -135,6 +135,36 @@ export class SfuService {
     }
   }
 
+  /** Clear stale transports/producers when the same user re-joins signaling (reload/reconnect). */
+  resetPeerForRejoin(roomId: string, userId: string): void {
+    const room = this.rooms.get(roomId);
+
+    if (!room) {
+      return;
+    }
+
+    const peer = room.peers.get(userId);
+
+    if (!peer) {
+      return;
+    }
+
+    for (const producer of peer.producers.values()) {
+      producer.close();
+    }
+
+    for (const consumer of peer.consumers.values()) {
+      consumer.close();
+    }
+
+    peer.sendTransport?.close();
+    peer.recvTransport?.close();
+    peer.producers.clear();
+    peer.consumers.clear();
+    peer.sendTransport = undefined;
+    peer.recvTransport = undefined;
+  }
+
   getRtpCapabilities(roomId: string): RtpCapabilities {
     const room = this.getRoom(roomId);
     return room.router.rtpCapabilities;

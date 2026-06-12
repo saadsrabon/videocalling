@@ -2,6 +2,7 @@ import type { AuthUser } from "../../auth/types.js";
 import type { RoomService } from "../../rooms/room-service.js";
 import type { SfuService } from "../../sfu/sfu-service.js";
 import type { ConnectionRegistry } from "../connection-registry.js";
+import { sendLobbyWaiting } from "./lobby.js";
 import {
   SIGNALING_VERSION,
   type ClientMessage,
@@ -34,7 +35,7 @@ export async function handleJoin(
 ): Promise<void> {
   const { roomId } = message;
 
-  if (!ctx.roomService.isParticipant(roomId, ctx.user.userId)) {
+  if (!ctx.roomService.isInMeeting(roomId, ctx.user.userId)) {
     sendMessage(ctx.send, {
       type: "error",
       code: "not_in_room",
@@ -57,30 +58,45 @@ export async function handleJoin(
   ctx.registry.bindRoom(ctx.user.userId, roomId);
 
   const roomMode = ctx.roomService.getRoomMode(roomId) ?? "p2p";
+
+  if (roomMode === "sfu" && ctx.roomService.isWaiting(roomId, ctx.user.userId)) {
+    sendLobbyWaiting(ctx, roomId);
+    return;
+  }
+
   const participantCount = ctx.roomService.listParticipantIds(roomId).length;
 
   if (roomMode === "sfu") {
+    ctx.sfuService.resetPeerForRejoin(roomId, ctx.user.userId);
     await ctx.sfuService.joinPeer(roomId, ctx.user.userId, participantCount);
   }
 
-  const participants = ctx.roomService
-    .listParticipantIds(roomId)
-    .filter((id: string) => id !== ctx.user.userId);
+  const roster = ctx.roomService.getParticipantRoster(roomId);
+  const participants = roster
+    .map((participant) => participant.userId)
+    .filter((id) => id !== ctx.user.userId);
 
   sendMessage(ctx.send, {
     type: "joined",
     roomId,
     participants,
+    roster,
+    hostUserId: ctx.roomService.getHostUserId(roomId),
     mode: roomMode,
     v: SIGNALING_VERSION,
   });
 
-  for (const participantId of participants) {
+  for (const participant of roster) {
+    if (participant.userId === ctx.user.userId) {
+      continue;
+    }
+
     ctx.registry.sendToUser(
-      participantId,
+      participant.userId,
       JSON.stringify({
         type: "peer-joined",
         userId: ctx.user.userId,
+        displayName: ctx.roomService.getDisplayName(roomId, ctx.user.userId),
         v: SIGNALING_VERSION,
       }),
     );
@@ -98,8 +114,9 @@ export function handlePeerDisconnect(
   }
 
   const roomMode = ctx.roomService.getRoomMode(roomId);
+  const wasAdmitted = ctx.roomService.isParticipant(roomId, userId);
 
-  if (roomMode === "sfu") {
+  if (roomMode === "sfu" && wasAdmitted) {
     ctx.sfuService.removePeer(roomId, userId);
   }
 

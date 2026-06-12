@@ -262,7 +262,15 @@ export type ClientMessage =
 
       v?: number;
 
-    };
+    }
+
+  | { type: "lobby.admit"; roomId: string; userId: string; v?: number }
+
+  | { type: "lobby.deny"; roomId: string; userId: string; v?: number }
+
+  | { type: "lobby.list"; roomId: string; v?: number }
+
+  | { type: "meeting.chat.send"; roomId: string; text: string; v?: number };
 
 
 
@@ -278,13 +286,73 @@ export type ServerMessage =
 
       participants: string[];
 
+      roster?: Array<{ userId: string; displayName: string }>;
+
+      hostUserId?: string | null;
+
       mode?: "p2p" | "sfu";
 
       v: number;
 
     }
 
-  | { type: "peer-joined"; userId: string; v: number }
+  | {
+      type: "peer-joined";
+      userId: string;
+      displayName?: string;
+      v: number;
+    }
+
+  | {
+      type: "lobby.waiting";
+      roomId: string;
+      hostUserId: string | null;
+      v: number;
+    }
+
+  | {
+      type: "lobby.admitted";
+      roomId: string;
+      userId?: string;
+      participant?: { userId: string; displayName: string };
+      roster: Array<{ userId: string; displayName: string }>;
+      hostUserId?: string | null;
+      v: number;
+    }
+
+  | {
+      type: "lobby.denied";
+      roomId: string;
+      userId?: string;
+      message?: string;
+      v: number;
+    }
+
+  | {
+      type: "lobby.request";
+      roomId: string;
+      userId: string;
+      displayName: string;
+      v: number;
+    }
+
+  | {
+      type: "lobby.list";
+      roomId: string;
+      waiting: Array<{ userId: string; displayName: string }>;
+      v: number;
+    }
+
+  | {
+      type: "meeting.chat";
+      roomId: string;
+      id: string;
+      from: string;
+      displayName: string;
+      text: string;
+      sentAt: string;
+      v: number;
+    }
 
   | { type: "offer"; from: string; sdp: string; v: number }
 

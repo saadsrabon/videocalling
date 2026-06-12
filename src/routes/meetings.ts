@@ -46,6 +46,43 @@ const plugin: FastifyPluginAsync = async (app) => {
     },
   );
 
+  app.get(
+    "/v1/meetings/:code/roster",
+    { preHandler: requireAuth },
+    async (request, reply) => {
+      const { code } = request.params as { code: string };
+
+      try {
+        const meeting = app.roomService.getMeetingByCode(code);
+
+        if (!app.roomService.isHost(meeting.roomId, request.user.userId)) {
+          return reply.code(403).send({
+            error: "not_host",
+            message: "Only the meeting host can view the roster",
+          });
+        }
+
+        return {
+          roomId: meeting.roomId,
+          code: meeting.code,
+          hostUserId: meeting.hostUserId,
+          admitted: app.roomService.getParticipantRoster(meeting.roomId),
+          waiting: app.roomService.getWaitingRoster(meeting.roomId),
+        };
+      } catch (error) {
+        if (error instanceof RoomError) {
+          const status = error.code === "meeting_expired" ? 410 : 404;
+          return reply.code(status).send({
+            error: error.code,
+            message: error.message,
+          });
+        }
+
+        throw error;
+      }
+    },
+  );
+
   app.get("/v1/meetings/:code", async (request, reply) => {
     const { code } = request.params as { code: string };
 

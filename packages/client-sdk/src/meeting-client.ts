@@ -14,6 +14,8 @@ import type {
   MeetingClientJoinOptions,
   MeetingCreateResponse,
   MeetingJoinResponse,
+  MeetingJoinStatus,
+  ParticipantInfo,
 } from "./types.js";
 import { authHeaders, jsonPostInit, normalizeServerUrl, normalizeToken } from "./http.js";
 
@@ -23,9 +25,50 @@ type ServerMessage =
       type: "joined";
       roomId: string;
       participants: string[];
+      roster?: ParticipantInfo[];
+      hostUserId?: string | null;
       mode?: "p2p" | "sfu";
     }
-  | { type: "peer-joined"; userId: string }
+  | { type: "peer-joined"; userId: string; displayName?: string }
+  | {
+      type: "lobby.waiting";
+      roomId: string;
+      hostUserId: string | null;
+    }
+  | {
+      type: "lobby.admitted";
+      roomId: string;
+      roster: ParticipantInfo[];
+      hostUserId?: string | null;
+      userId?: string;
+      participant?: ParticipantInfo;
+    }
+  | {
+      type: "lobby.denied";
+      roomId: string;
+      userId?: string;
+      message?: string;
+    }
+  | {
+      type: "lobby.request";
+      roomId: string;
+      userId: string;
+      displayName: string;
+    }
+  | {
+      type: "lobby.list";
+      roomId: string;
+      waiting: ParticipantInfo[];
+    }
+  | {
+      type: "meeting.chat";
+      roomId: string;
+      id: string;
+      from: string;
+      displayName: string;
+      text: string;
+      sentAt: string;
+    }
   | { type: "sfu.peerLeft"; roomId: string; peerId: string }
   | {
       type: "sfu.rtpCapabilities";
@@ -188,9 +231,14 @@ export class MeetingClient {
 
   private _userId = "";
   private roomId = "";
+  private hostUserId: string | null = null;
+  private joinStatus: MeetingJoinStatus = "admitted";
+  private readonly roster = new Map<string, ParticipantInfo>();
   private micMuted = false;
   private cameraOff = false;
   private closed = false;
+  private lobbyAdmittedResolve: (() => void) | null = null;
+  private lobbyAdmittedReject: ((error: Error) => void) | null = null;
 
   private readonly pendingRequests = new Map<
     string,
@@ -201,6 +249,12 @@ export class MeetingClient {
   private readonly remoteTracks = new Map<string, RemoteTrackMeta>();
   private readonly producerIndex = new Map<string, string>();
   private readonly pendingConsumes: PendingConsume[] = [];
+  private joinOptions: MeetingClientJoinOptions | null = null;
+  private intentionalLeave = false;
+  private reconnectAttempts = 0;
+  private readonly maxReconnectAttempts = 5;
+  private resyncInProgress = false;
+  private mediaSessionReady = false;
 
   private constructor(options: MeetingClientJoinOptions) {
     this.serverUrl = normalizeServerUrl(options.serverUrl);
@@ -214,6 +268,22 @@ export class MeetingClient {
 
   get currentRoomId(): string {
     return this.roomId;
+  }
+
+  get isHost(): boolean {
+    return Boolean(this.hostUserId && this._userId === this.hostUserId);
+  }
+
+  get currentJoinStatus(): MeetingJoinStatus {
+    return this.joinStatus;
+  }
+
+  getParticipantRoster(): ParticipantInfo[] {
+    return [...this.roster.values()];
+  }
+
+  getDisplayName(userId: string): string {
+    return this.roster.get(userId)?.displayName ?? userId;
   }
 
   get localMediaStream(): MediaStream | null {
@@ -368,11 +438,104 @@ export class MeetingClient {
     return Boolean(this.screenProducer && !this.screenProducer.closed);
   }
 
+  admitParticipant(userId: string): void {
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
+      throw new Error("Signaling socket is not open");
+    }
+
+    this.ws.send(
+      JSON.stringify({
+        type: "lobby.admit",
+        roomId: this.roomId,
+        userId,
+      }),
+    );
+  }
+
+  denyParticipant(userId: string): void {
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
+      throw new Error("Signaling socket is not open");
+    }
+
+    this.ws.send(
+      JSON.stringify({
+        type: "lobby.deny",
+        roomId: this.roomId,
+        userId,
+      }),
+    );
+  }
+
+  listWaitingParticipants(): void {
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
+      throw new Error("Signaling socket is not open");
+    }
+
+    this.ws.send(
+      JSON.stringify({
+        type: "lobby.list",
+        roomId: this.roomId,
+      }),
+    );
+  }
+
+  sendChat(text: string): void {
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
+      throw new Error("Signaling socket is not open");
+    }
+
+    this.ws.send(
+      JSON.stringify({
+        type: "meeting.chat.send",
+        roomId: this.roomId,
+        text,
+      }),
+    );
+  }
+
+  /** Re-fetch and consume all remote producers (after reconnect or missed tracks). */
+  async resyncRemoteMedia(): Promise<void> {
+    if (!this.mediaSessionReady || this.closed) {
+      return;
+    }
+
+    if (this.resyncInProgress) {
+      return;
+    }
+
+    this.resyncInProgress = true;
+    this.emit({ type: "media-syncing" });
+
+    try {
+      for (const producerId of [...this.remoteTracks.keys()]) {
+        this.removeProducerTrack(producerId);
+      }
+
+      const existingProducers = await this.listExistingProducers();
+      this.log("resync remote media", { count: existingProducers.length });
+
+      for (const producer of existingProducers) {
+        await this.consumeRemoteProducerWithRetry(
+          producer.peerId,
+          producer.producerId,
+          producer.kind,
+          producer.source,
+        );
+      }
+
+      await this.flushPendingConsumes();
+      this.emit({ type: "media-ready" });
+    } finally {
+      this.resyncInProgress = false;
+    }
+  }
+
   async leave(): Promise<void> {
     if (this.closed) {
       return;
     }
 
+    this.intentionalLeave = true;
     this.closed = true;
 
     for (const meta of this.remoteTracks.values()) {
@@ -444,6 +607,24 @@ export class MeetingClient {
     });
   }
 
+  private updateRoster(entries: ParticipantInfo[]): void {
+    for (const entry of entries) {
+      this.roster.set(entry.userId, entry);
+    }
+
+    this.emit({ type: "participant-roster", roster: this.getParticipantRoster() });
+  }
+
+  private emitJoined(roomId: string, participants: string[], roster: ParticipantInfo[]): void {
+    this.emit({
+      type: "joined",
+      roomId,
+      participants,
+      roster,
+      hostUserId: this.hostUserId,
+    });
+  }
+
   private handleServerMessage(message: ServerMessage): void {
     if ("requestId" in message && message.requestId) {
       const pending = this.pendingRequests.get(message.requestId);
@@ -461,18 +642,103 @@ export class MeetingClient {
         break;
       case "joined":
         this.roomId = message.roomId;
+        if (message.hostUserId !== undefined) {
+          this.hostUserId = message.hostUserId;
+        }
+        if (message.roster) {
+          this.updateRoster(message.roster);
+        }
+        this.joinStatus = "admitted";
+        this.emitJoined(
+          message.roomId,
+          message.participants,
+          message.roster ?? this.getParticipantRoster(),
+        );
+        break;
+      case "lobby.waiting":
+        this.joinStatus = "waiting";
+        if (message.hostUserId !== undefined) {
+          this.hostUserId = message.hostUserId;
+        }
         this.emit({
-          type: "joined",
+          type: "lobby-waiting",
           roomId: message.roomId,
-          participants: message.participants,
+          hostUserId: message.hostUserId,
+        });
+        break;
+      case "lobby.admitted":
+        this.joinStatus = "admitted";
+        if (message.hostUserId !== undefined) {
+          this.hostUserId = message.hostUserId;
+        }
+        this.updateRoster(message.roster);
+        this.emit({
+          type: "lobby-admitted",
+          roomId: message.roomId,
+          roster: message.roster,
+          hostUserId: this.hostUserId,
+        });
+        this.emitJoined(
+          message.roomId,
+          message.roster.map((entry) => entry.userId).filter((id) => id !== this._userId),
+          message.roster,
+        );
+        this.lobbyAdmittedResolve?.();
+        this.lobbyAdmittedResolve = null;
+        this.lobbyAdmittedReject = null;
+        break;
+      case "lobby.denied":
+        this.emit({
+          type: "lobby-denied",
+          roomId: message.roomId,
+          message: message.message,
+        });
+        this.lobbyAdmittedReject?.(
+          new Error(message.message ?? "The host declined your request to join"),
+        );
+        this.lobbyAdmittedResolve = null;
+        this.lobbyAdmittedReject = null;
+        break;
+      case "lobby.request":
+        this.emit({
+          type: "lobby-request",
+          roomId: message.roomId,
+          userId: message.userId,
+          displayName: message.displayName,
+        });
+        break;
+      case "lobby.list":
+        this.emit({
+          type: "lobby-waiting-list",
+          waiting: message.waiting,
+        });
+        break;
+      case "meeting.chat":
+        this.emit({
+          type: "chat-message",
+          id: message.id,
+          from: message.from,
+          displayName: message.displayName,
+          text: message.text,
+          sentAt: message.sentAt,
         });
         break;
       case "peer-joined":
-        this.emit({ type: "peer-joined", userId: message.userId });
-        void this.consumeProducer(message.userId, message.userId).catch((error) => {
-          this.emit({
-            type: "error",
-            message: error instanceof Error ? error.message : "Consume failed",
+        if (message.displayName) {
+          this.roster.set(message.userId, {
+            userId: message.userId,
+            displayName: message.displayName,
+          });
+        }
+        this.emit({
+          type: "peer-joined",
+          userId: message.userId,
+          displayName: message.displayName,
+        });
+        void this.syncPeerMedia(message.userId).catch((error) => {
+          this.log("sync peer media failed", {
+            peerId: message.userId,
+            error: error instanceof Error ? error.message : String(error),
           });
         });
         break;
@@ -490,7 +756,7 @@ export class MeetingClient {
           kind: message.kind,
           source: message.appData?.source ?? "camera",
         });
-        void this.consumeRemoteProducer(
+        void this.consumeRemoteProducerWithRetry(
           message.peerId,
           message.producerId,
           message.kind,
@@ -502,7 +768,6 @@ export class MeetingClient {
             producerId: message.producerId,
             error: errMsg,
           });
-          this.emit({ type: "error", message: errMsg });
         });
         break;
       case "sfu.producerClosed":
@@ -563,15 +828,42 @@ export class MeetingClient {
           state,
           message,
         });
+
+        if (state === "failed" && this.mediaSessionReady) {
+          void this.resyncRemoteMedia();
+        }
       }
     });
   }
 
-  private async connectAndJoin(_options: MeetingClientJoinOptions): Promise<void> {
+  private emitConnectionState(
+    state: "connecting" | "connected" | "reconnecting" | "disconnected",
+    message?: string,
+  ): void {
+    this.emit({ type: "connection-state", state, message });
+  }
+
+  private async connectAndJoin(options: MeetingClientJoinOptions): Promise<void> {
+    this.joinOptions = options;
+    this.emitConnectionState("connecting", "Joining meeting…");
     const baseUrl = this.serverUrl;
     const headers = authHeaders(this.token);
 
-    this.log("acquiring camera/mic before network setup");
+    const joinResult = await this.httpJoin(baseUrl, headers);
+    this.roomId = joinResult.roomId;
+    this.hostUserId = joinResult.hostUserId;
+    this.joinStatus = joinResult.status;
+    this.updateRoster(joinResult.participants);
+
+    await this.openSignaling();
+
+    if (joinResult.status === "waiting") {
+      await this.waitForLobbyAdmitted();
+    } else {
+      await this.waitForJoined();
+    }
+
+    this.log("acquiring camera/mic after admission");
     this.localStream = await getUserMediaWithRetry((message, data) =>
       this.log(message, data),
     );
@@ -583,6 +875,14 @@ export class MeetingClient {
 
     void ((await iceResponse.json()) as IceServersResponse);
 
+    await this.startMediasoupSession();
+    this.emitConnectionState("connected");
+  }
+
+  private async httpJoin(
+    baseUrl: string,
+    headers: HeadersInit,
+  ): Promise<MeetingJoinResponse> {
     const joinResponse = await fetch(
       `${baseUrl}/v1/meetings/${encodeURIComponent(this.code)}/join`,
       {
@@ -608,16 +908,10 @@ export class MeetingClient {
         throw new Error(`Failed to join meeting (${joinResponse.status})`);
       }
 
-      const guestResult = (await guestJoin.json()) as MeetingJoinResponse;
-      this.roomId = guestResult.roomId;
-    } else {
-      const joinResult = (await joinResponse.json()) as MeetingJoinResponse;
-      this.roomId = joinResult.roomId;
+      return (await guestJoin.json()) as MeetingJoinResponse;
     }
 
-    await this.openSignaling();
-    await this.waitForJoined();
-    await this.startMediasoupSession();
+    return (await joinResponse.json()) as MeetingJoinResponse;
   }
 
   private openSignaling(): Promise<void> {
@@ -626,13 +920,113 @@ export class MeetingClient {
       wsUrl.searchParams.set("token", this.token);
       this.ws = new WebSocket(wsUrl.toString());
 
-      this.ws.onopen = () => resolve();
+      this.ws.onopen = () => {
+        this.reconnectAttempts = 0;
+        resolve();
+      };
       this.ws.onerror = () => reject(new Error("WebSocket connection failed"));
       this.ws.onmessage = (event) => {
         const message = JSON.parse(String(event.data)) as ServerMessage;
         this.handleServerMessage(message);
       };
+      this.ws.onclose = () => {
+        if (this.intentionalLeave || this.closed) {
+          return;
+        }
+
+        void this.handleSignalingDisconnect();
+      };
     });
+  }
+
+  private async handleSignalingDisconnect(): Promise<void> {
+    if (this.intentionalLeave || this.closed || !this.joinOptions) {
+      return;
+    }
+
+    if (this.reconnectAttempts >= this.maxReconnectAttempts) {
+      this.emitConnectionState("disconnected", "Connection lost");
+      this.emit({ type: "error", message: "Connection lost — please reload the page" });
+      return;
+    }
+
+    this.reconnectAttempts += 1;
+    const delayMs = Math.min(1000 * 2 ** (this.reconnectAttempts - 1), 8000);
+    this.emitConnectionState(
+      "reconnecting",
+      `Reconnecting (${this.reconnectAttempts}/${this.maxReconnectAttempts})…`,
+    );
+
+    await new Promise((resolve) => setTimeout(resolve, delayMs));
+
+    if (this.intentionalLeave || this.closed) {
+      return;
+    }
+
+    try {
+      await this.reconnectSignaling();
+    } catch (error) {
+      this.log("reconnect failed", {
+        attempt: this.reconnectAttempts,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      void this.handleSignalingDisconnect();
+    }
+  }
+
+  private async reconnectSignaling(): Promise<void> {
+    if (!this.joinOptions) {
+      throw new Error("Missing join options");
+    }
+
+    this.teardownMediaSession();
+
+    const headers = authHeaders(this.token);
+    const joinResult = await this.httpJoin(this.serverUrl, headers);
+    this.roomId = joinResult.roomId;
+    this.joinStatus = joinResult.status;
+    this.updateRoster(joinResult.participants);
+
+    await this.openSignaling();
+
+    if (this.joinStatus === "waiting") {
+      await this.waitForLobbyAdmitted();
+    } else {
+      await this.waitForJoined();
+    }
+
+    if (!this.localStream) {
+      this.localStream = await getUserMediaWithRetry((message, data) =>
+        this.log(message, data),
+      );
+    }
+
+    await this.startMediasoupSession();
+    this.emitConnectionState("connected");
+  }
+
+  private teardownMediaSession(): void {
+    this.mediaSessionReady = false;
+
+    for (const meta of this.remoteTracks.values()) {
+      meta.consumer.close();
+    }
+    this.remoteTracks.clear();
+    this.producerIndex.clear();
+    this.pendingConsumes.length = 0;
+
+    this.micProducer?.close();
+    this.cameraProducer?.close();
+    this.screenProducer?.close();
+    this.micProducer = null;
+    this.cameraProducer = null;
+    this.screenProducer = null;
+
+    this.sendTransport?.close();
+    this.recvTransport?.close();
+    this.sendTransport = null;
+    this.recvTransport = null;
+    this.device = null;
   }
 
   private waitForJoined(): Promise<void> {
@@ -641,6 +1035,28 @@ export class MeetingClient {
         if (event.type === "joined") {
           this.off(handler);
           resolve();
+        } else if (event.type === "error") {
+          this.off(handler);
+          reject(new Error(event.message));
+        }
+      };
+
+      this.on(handler);
+      this.ws?.send(JSON.stringify({ type: "join", roomId: this.roomId }));
+    });
+  }
+
+  private waitForLobbyAdmitted(): Promise<void> {
+    return new Promise((resolve, reject) => {
+      this.lobbyAdmittedResolve = resolve;
+      this.lobbyAdmittedReject = reject;
+
+      const handler: MeetingClientEventHandler = (event) => {
+        if (event.type === "lobby-admitted" || event.type === "joined") {
+          this.off(handler);
+        } else if (event.type === "lobby-denied") {
+          this.off(handler);
+          reject(new Error(event.message ?? "The host declined your request to join"));
         } else if (event.type === "error") {
           this.off(handler);
           reject(new Error(event.message));
@@ -673,7 +1089,7 @@ export class MeetingClient {
     });
 
     for (const producer of existingProducers) {
-      await this.consumeRemoteProducer(
+      await this.consumeRemoteProducerWithRetry(
         producer.peerId,
         producer.producerId,
         producer.kind,
@@ -682,7 +1098,9 @@ export class MeetingClient {
     }
 
     await this.flushPendingConsumes();
+    this.mediaSessionReady = true;
     this.log("mediasoup session ready", { userId: this._userId, roomId: this.roomId });
+    this.emit({ type: "media-ready" });
   }
 
   private async flushPendingConsumes(): Promise<void> {
@@ -696,7 +1114,7 @@ export class MeetingClient {
 
     for (const item of queue) {
       try {
-        await this.consumeRemoteProducer(
+        await this.consumeRemoteProducerWithRetry(
           item.peerId,
           item.producerId,
           item.kind,

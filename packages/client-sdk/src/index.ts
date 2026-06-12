@@ -12,6 +12,8 @@ export type {
   MeetingClientJoinOptions,
   MeetingCreateResponse,
   MeetingJoinResponse,
+  MeetingJoinStatus,
+  ParticipantInfo,
   RoomCreateResponse,
   RoomJoinResponse,
   StaffCallClientOptions,

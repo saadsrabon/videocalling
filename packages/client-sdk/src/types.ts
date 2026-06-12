@@ -84,13 +84,23 @@ export interface MeetingCreateResponse {
   title?: string;
   joinUrl: string;
   maxParticipants: number;
+  hostUserId?: string;
+}
+
+export type MeetingJoinStatus = "admitted" | "waiting";
+
+export interface ParticipantInfo {
+  userId: string;
+  displayName: string;
 }
 
 export interface MeetingJoinResponse {
   roomId: string;
   mode: "p2p" | "sfu";
   code?: string;
-  participants: string[];
+  status: MeetingJoinStatus;
+  hostUserId: string | null;
+  participants: ParticipantInfo[];
   alreadyJoined: boolean;
 }
 
@@ -114,9 +124,46 @@ export type MediaSource = "camera" | "screen";
 
 export type MeetingClientEvent =
   | { type: "connected"; userId: string }
-  | { type: "joined"; roomId: string; participants: string[] }
-  | { type: "peer-joined"; userId: string }
+  | {
+      type: "connection-state";
+      state: "connecting" | "connected" | "reconnecting" | "disconnected";
+      message?: string;
+    }
+  | { type: "media-syncing" }
+  | { type: "media-ready" }
+  | {
+      type: "joined";
+      roomId: string;
+      participants: string[];
+      roster: ParticipantInfo[];
+      hostUserId: string | null;
+    }
+  | { type: "peer-joined"; userId: string; displayName?: string }
   | { type: "peer-left"; userId: string }
+  | { type: "lobby-waiting"; roomId: string; hostUserId: string | null }
+  | {
+      type: "lobby-admitted";
+      roomId: string;
+      roster: ParticipantInfo[];
+      hostUserId: string | null;
+    }
+  | { type: "lobby-denied"; roomId: string; message?: string }
+  | {
+      type: "lobby-request";
+      roomId: string;
+      userId: string;
+      displayName: string;
+    }
+  | { type: "lobby-waiting-list"; waiting: ParticipantInfo[] }
+  | { type: "participant-roster"; roster: ParticipantInfo[] }
+  | {
+      type: "chat-message";
+      id: string;
+      from: string;
+      displayName: string;
+      text: string;
+      sentAt: string;
+    }
   | {
       type: "track-added";
       peerId: string;

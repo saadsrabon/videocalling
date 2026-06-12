@@ -67,6 +67,7 @@ src/
 | 5 — TURN (VPS / coturn) | ✅ Complete |
 | 6 — Browser SDK | ✅ Complete |
 | 7 — SFU meetings | ✅ Complete |
+| 8 — Meeting UX | ✅ Complete |
 
 **Frontend docs:** [`docs/frontend-integration.md`](docs/frontend-integration.md) — update when adding user-facing API/SDK features.
 
@@ -498,6 +499,52 @@ src/
 
 ---
 
+## Phase 8 — Meeting UX enhancements
+
+### Step 8.1 — Lobby + roster (backend) ✅
+
+**Files:** `src/rooms/*`, `src/signaling/handlers/lobby.ts`, `src/signaling/handlers/join.ts`, `src/routes/meetings.ts`
+
+**Why:** Host admits guests and non-creator staff before SFU/media starts.
+
+**Verify:** Guest gets `lobby.waiting`; host sends `lobby.admit`; guest receives media.
+
+---
+
+### Step 8.2 — MeetingClient lobby + chat API ✅
+
+**Files:** `packages/client-sdk/src/meeting-client.ts`, `packages/client-sdk/src/types.ts`
+
+**Why:** Defer `getUserMedia` until admitted; expose admit/deny/chat helpers.
+
+**Verify:** `npm run typecheck:all` · sync to `@simfree/video-client`.
+
+---
+
+### Step 8.3 — Admin lobby UI + names ✅
+
+**Files:** `MeetingWaitingScreen`, `MeetingLobbyPanel`, `MeetingRoom.tsx`, `/meetings` join-as-host
+
+**Verify:** Guest waiting screen; host admit panel; display names on tiles.
+
+---
+
+### Step 8.4 — In-meeting chat + emoji ✅
+
+**Files:** `src/signaling/handlers/meeting-chat.ts`, `MeetingChatPanel.tsx`
+
+**Verify:** Admitted peers send chat; waiting users cannot.
+
+---
+
+### Step 8.5 — Grid + screen share layout ✅
+
+**Files:** `MeetingVideoGrid.tsx`, grid mode controls in `MeetingRoom.tsx`
+
+**Verify:** Screen stage + camera strip; grid auto/compact/focus modes.
+
+---
+
 ## Environment variables (living list)
 
 | Variable | Phase | Description |
@@ -530,6 +577,6 @@ npm run typecheck  # TypeScript without emit
 
 ## Next step
 
-Phases 0–7 complete. For production: deploy API + coturn + mediasoup SFU on VPS, set `MEDIASOUP_ANNOUNCED_IP`, and rebuild Simfree admin with `@simfree/video-client`.
+Phases 0–8 complete. Deploy videocalling + admin with lobby, chat, and grid UX. See `docs/deployment-split-servers.md` for split-server setup.
 
 See `docs/coturn-vps.md` to finish TURN on your VPS.
