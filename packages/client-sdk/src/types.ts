@@ -85,6 +85,8 @@ export interface MeetingCreateResponse {
   joinUrl: string;
   maxParticipants: number;
   hostUserId?: string;
+  durationMinutes?: number;
+  expiresAt?: string;
 }
 
 export type MeetingJoinStatus = "admitted" | "waiting";
@@ -103,6 +105,7 @@ export interface MeetingJoinResponse {
   participants: ParticipantInfo[];
   alreadyJoined: boolean;
   ghost?: boolean;
+  expiresAt?: string;
 }
 
 export interface ActiveMeetingSummary {
@@ -111,6 +114,7 @@ export interface ActiveMeetingSummary {
   title?: string;
   hostUserId?: string;
   createdAt: string;
+  expiresAt?: string;
   participantCount: number;
   waitingCount: number;
   maxParticipants: number;
@@ -210,6 +214,12 @@ export type MeetingClientEvent =
       direction: "send" | "recv";
       state: string;
       message: string;
+    }
+  | { type: "meeting-expiring"; minutesRemaining: number }
+  | {
+      type: "meeting-ended";
+      reason: "expired" | "ended";
+      message?: string;
     }
   | { type: "error"; message: string };
 

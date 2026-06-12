@@ -119,6 +119,12 @@ type ServerMessage =
       peerId: string;
       producerId: string;
     }
+  | {
+      type: "meeting.ended";
+      roomId: string;
+      reason: "expired" | "ended";
+      message?: string;
+    }
   | { type: "error"; code: string; message: string };
 
 interface RemoteTrackMeta {
@@ -209,9 +215,14 @@ async function getUserMediaWithRetry(
   ];
 
   let lastError: unknown;
+  let videoTimedOut = false;
 
   for (let attempt = 0; attempt < attempts.length; attempt += 1) {
     const constraints = attempts[attempt]!;
+
+    if (videoTimedOut && constraints.video) {
+      continue;
+    }
 
     try {
       log("requesting getUserMedia", { attempt: attempt + 1, constraints });
@@ -240,6 +251,10 @@ async function getUserMediaWithRetry(
 
       if (name === "NotAllowedError" || name === "SecurityError") {
         throw error;
+      }
+
+      if (name === "AbortError" && constraints.video) {
+        videoTimedOut = true;
       }
 
       if (attempt < attempts.length - 1) {
@@ -340,6 +355,9 @@ export class MeetingClient {
   private readonly maxReconnectAttempts = 5;
   private resyncInProgress = false;
   private mediaSessionReady = false;
+  private expiresAtMs: number | null = null;
+  private meetingExpiryTimer: ReturnType<typeof setTimeout> | null = null;
+  private meetingWarningTimers: ReturnType<typeof setTimeout>[] = [];
 
   private constructor(options: MeetingClientJoinOptions) {
     this.serverUrl = normalizeServerUrl(options.serverUrl);
@@ -369,6 +387,10 @@ export class MeetingClient {
     return this.joinStatus;
   }
 
+  get meetingExpiresAt(): string | null {
+    return this.expiresAtMs ? new Date(this.expiresAtMs).toISOString() : null;
+  }
+
   getParticipantRoster(): ParticipantInfo[] {
     return [...this.roster.values()];
   }
@@ -384,16 +406,26 @@ export class MeetingClient {
   static async createMeeting(
     serverUrl: string,
     token: string,
-    title?: string,
+    options?: { title?: string; durationMinutes?: number },
   ): Promise<MeetingCreateResponse> {
     const baseUrl = normalizeServerUrl(serverUrl);
+    const body: { title?: string; durationMinutes?: number } = {};
+
+    if (options?.title) {
+      body.title = options.title;
+    }
+
+    if (options?.durationMinutes !== undefined) {
+      body.durationMinutes = options.durationMinutes;
+    }
+
     const response = await fetch(`${baseUrl}/v1/meetings`, {
       method: "POST",
       headers: {
         ...authHeaders(token),
         "Content-Type": "application/json",
       },
-      body: JSON.stringify(title ? { title } : {}),
+      body: JSON.stringify(body),
     });
 
     if (!response.ok) {
@@ -637,6 +669,7 @@ export class MeetingClient {
 
     this.intentionalLeave = true;
     this.closed = true;
+    this.clearMeetingExpiryWatch();
 
     for (const meta of this.remoteTracks.values()) {
       meta.consumer.close();
@@ -868,6 +901,9 @@ export class MeetingClient {
       case "sfu.producerClosed":
         this.removeProducerTrack(message.producerId);
         break;
+      case "meeting.ended":
+        void this.handleMeetingEnded(message.reason, message.message);
+        break;
       case "error":
         this.emit({ type: "error", message: message.message });
         break;
@@ -1012,6 +1048,77 @@ export class MeetingClient {
     this.emit({ type: "connection-state", state, message });
   }
 
+  private clearMeetingExpiryWatch(): void {
+    if (this.meetingExpiryTimer) {
+      clearTimeout(this.meetingExpiryTimer);
+      this.meetingExpiryTimer = null;
+    }
+
+    for (const timer of this.meetingWarningTimers) {
+      clearTimeout(timer);
+    }
+
+    this.meetingWarningTimers = [];
+  }
+
+  private startMeetingExpiryWatch(expiresAtIso?: string): void {
+    this.clearMeetingExpiryWatch();
+
+    if (!expiresAtIso) {
+      this.expiresAtMs = null;
+      return;
+    }
+
+    const expiresAtMs = Date.parse(expiresAtIso);
+
+    if (!Number.isFinite(expiresAtMs)) {
+      this.expiresAtMs = null;
+      return;
+    }
+
+    this.expiresAtMs = expiresAtMs;
+    const msRemaining = expiresAtMs - Date.now();
+
+    if (msRemaining <= 0) {
+      void this.handleMeetingEnded("expired", "This meeting has ended.");
+      return;
+    }
+
+    for (const minutes of [5, 1]) {
+      const delay = msRemaining - minutes * 60_000;
+
+      if (delay > 0) {
+        const timer = setTimeout(() => {
+          if (!this.closed) {
+            this.emit({ type: "meeting-expiring", minutesRemaining: minutes });
+          }
+        }, delay);
+        this.meetingWarningTimers.push(timer);
+      }
+    }
+
+    this.meetingExpiryTimer = setTimeout(() => {
+      if (!this.closed) {
+        void this.handleMeetingEnded(
+          "expired",
+          "This meeting has reached its time limit.",
+        );
+      }
+    }, msRemaining);
+  }
+
+  private async handleMeetingEnded(
+    reason: "expired" | "ended",
+    message?: string,
+  ): Promise<void> {
+    if (this.closed) {
+      return;
+    }
+
+    this.emit({ type: "meeting-ended", reason, message });
+    await this.leave();
+  }
+
   private async connectAndJoin(options: MeetingClientJoinOptions): Promise<void> {
     this.joinOptions = options;
     this.emitConnectionState("connecting", "Joining meeting…");
@@ -1023,6 +1130,7 @@ export class MeetingClient {
     this.hostUserId = joinResult.hostUserId;
     this.joinStatus = joinResult.status;
     this.updateRoster(joinResult.participants);
+    this.startMeetingExpiryWatch(joinResult.expiresAt);
 
     await this.openSignaling();
 
@@ -1165,6 +1273,7 @@ export class MeetingClient {
     this.hostUserId = joinResult.hostUserId;
     this.joinStatus = joinResult.status;
     this.updateRoster(joinResult.participants);
+    this.startMeetingExpiryWatch(joinResult.expiresAt);
 
     await this.openSignaling();
 

@@ -569,6 +569,14 @@ export type ServerMessage =
 
   | { type: "sfu.peerLeft"; roomId: string; peerId: string; v: number }
 
+  | {
+      type: "meeting.ended";
+      roomId: string;
+      reason: "expired" | "ended";
+      message?: string;
+      v: number;
+    }
+
   | { type: "error"; code: string; message: string; v: number };
 
 

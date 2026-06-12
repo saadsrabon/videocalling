@@ -427,6 +427,31 @@ export class SfuService {
     }
   }
 
+  closeRoom(roomId: string): void {
+    const room = this.rooms.get(roomId);
+
+    if (!room) {
+      return;
+    }
+
+    for (const peer of room.peers.values()) {
+      for (const producer of peer.producers.values()) {
+        producer.close();
+      }
+
+      for (const consumer of peer.consumers.values()) {
+        consumer.close();
+      }
+
+      peer.sendTransport?.close();
+      peer.recvTransport?.close();
+    }
+
+    room.peers.clear();
+    room.router.close();
+    this.rooms.delete(roomId);
+  }
+
   private findProducer(room: SfuRoom, producerId: string): Producer | undefined {
     for (const peer of room.peers.values()) {
       const producer = peer.producers.get(producerId);

@@ -10,6 +10,7 @@ import {
   type SignalingContext,
 } from "../signaling/handlers/sfu.js";
 import { handlePeerDisconnect } from "../signaling/handlers/join.js";
+import { startMeetingExpiryWatcher } from "../rooms/meeting-expiry.js";
 
 declare module "fastify" {
   interface FastifyInstance {
@@ -32,6 +33,17 @@ const plugin: FastifyPluginAsync = async (app) => {
       },
     };
     broadcastSfuEvent(ctx, event.roomId, event);
+  });
+
+  const stopMeetingExpiryWatcher = startMeetingExpiryWatcher({
+    roomService: app.roomService,
+    sfuService: app.sfuService,
+    registry,
+    log: app.log,
+  });
+
+  app.addHook("onClose", async () => {
+    stopMeetingExpiryWatcher();
   });
 
   await app.register(websocket);

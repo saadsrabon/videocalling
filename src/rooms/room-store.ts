@@ -23,6 +23,7 @@ export class InMemoryRoomStore implements RoomStore {
     createdBy?: string;
     title?: string;
     code?: string;
+    expiresAt?: Date;
   }): Room {
     const code = options?.code ?? (options?.mode === "sfu" ? this.uniqueCode() : undefined);
 
@@ -35,6 +36,7 @@ export class InMemoryRoomStore implements RoomStore {
       code,
       createdBy: options?.createdBy,
       title: options?.title,
+      expiresAt: options?.expiresAt,
     };
 
     this.rooms.set(room.id, room);
@@ -60,6 +62,38 @@ export class InMemoryRoomStore implements RoomStore {
 
   get(roomId: string): Room | undefined {
     return this.rooms.get(roomId);
+  }
+
+  delete(roomId: string): boolean {
+    const room = this.rooms.get(roomId);
+
+    if (!room) {
+      return false;
+    }
+
+    if (room.code) {
+      this.codeIndex.delete(room.code.toUpperCase());
+    }
+
+    this.rooms.delete(roomId);
+    return true;
+  }
+
+  listExpiredSfuRooms(): Room[] {
+    const now = Date.now();
+    const expired: Room[] = [];
+
+    for (const room of this.rooms.values()) {
+      if (room.mode !== "sfu" || !room.code || !room.expiresAt) {
+        continue;
+      }
+
+      if (room.expiresAt.getTime() <= now) {
+        expired.push(room);
+      }
+    }
+
+    return expired;
   }
 
   getByCode(code: string): Room | undefined {
@@ -258,6 +292,7 @@ export class InMemoryRoomStore implements RoomStore {
       title?: string;
       hostUserId?: string;
       createdAt: Date;
+      expiresAt?: Date;
       participantCount: number;
       waitingCount: number;
     }> = [];
@@ -285,6 +320,7 @@ export class InMemoryRoomStore implements RoomStore {
         title: room.title,
         hostUserId: room.createdBy,
         createdAt: room.createdAt,
+        expiresAt: room.expiresAt,
         participantCount,
         waitingCount: room.waitingParticipants.size,
       });

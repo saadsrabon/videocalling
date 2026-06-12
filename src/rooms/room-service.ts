@@ -11,6 +11,12 @@ function toParticipantInfo(participant: {
   };
 }
 
+function meetingTiming(room: { expiresAt?: Date }) {
+  return {
+    expiresAt: room.expiresAt?.toISOString(),
+  };
+}
+
 export class RoomService {
   constructor(
     private readonly store: RoomStore,
@@ -26,11 +32,18 @@ export class RoomService {
     };
   }
 
-  createMeeting(createdBy: string, title?: string) {
+  createMeeting(createdBy: string, title?: string, durationMinutes?: number) {
+    let expiresAt: Date | undefined;
+
+    if (durationMinutes !== undefined) {
+      expiresAt = new Date(Date.now() + durationMinutes * 60_000);
+    }
+
     const room = this.store.create({
       mode: "sfu",
       createdBy,
       title,
+      expiresAt,
     });
 
     if (!room.code) {
@@ -43,6 +56,8 @@ export class RoomService {
       createdAt: room.createdAt.toISOString(),
       title: room.title,
       hostUserId: createdBy,
+      expiresAt: room.expiresAt?.toISOString(),
+      durationMinutes,
     };
   }
 
@@ -64,6 +79,7 @@ export class RoomService {
       hostUserId: room.createdBy,
       participantCount: this.store.countParticipants(room.id),
       maxParticipants: this.maxSfuPeers,
+      expiresAt: room.expiresAt?.toISOString(),
     };
   }
 
@@ -101,6 +117,7 @@ export class RoomService {
         hostUserId: room.createdBy ?? null,
         participants: this.getParticipantRoster(roomId),
         alreadyJoined,
+        ...meetingTiming(room),
       };
     }
 
@@ -131,6 +148,7 @@ export class RoomService {
         participants: this.getParticipantRoster(roomId),
         alreadyJoined: alreadyAdmitted,
         ghost: true,
+        ...meetingTiming(room),
       };
     }
 
@@ -143,6 +161,7 @@ export class RoomService {
         hostUserId: room.createdBy ?? null,
         participants: this.getParticipantRoster(roomId),
         alreadyJoined: true,
+        ...meetingTiming(room),
       };
     }
 
@@ -155,6 +174,7 @@ export class RoomService {
         hostUserId: room.createdBy ?? null,
         participants: this.getParticipantRoster(roomId),
         alreadyJoined: false,
+        ...meetingTiming(room),
       };
     }
 
@@ -171,6 +191,7 @@ export class RoomService {
         hostUserId: room.createdBy ?? null,
         participants: this.getParticipantRoster(roomId),
         alreadyJoined: false,
+        ...meetingTiming(room),
       };
     }
 
@@ -190,6 +211,7 @@ export class RoomService {
       hostUserId: room.createdBy ?? null,
       participants: this.getParticipantRoster(roomId),
       alreadyJoined: false,
+      ...meetingTiming(room),
     };
   }
 
@@ -207,7 +229,37 @@ export class RoomService {
     return this.store.listSfuMeetings().map((meeting) => ({
       ...meeting,
       createdAt: meeting.createdAt.toISOString(),
+      expiresAt: meeting.expiresAt?.toISOString(),
       maxParticipants: this.maxSfuPeers,
+    }));
+  }
+
+  /** Collect user ids and remove an expired meeting from the room store. */
+  terminateMeeting(roomId: string): string[] {
+    const room = this.store.get(roomId);
+
+    if (!room) {
+      return [];
+    }
+
+    const userIds = new Set<string>();
+
+    for (const userId of room.participants.keys()) {
+      userIds.add(userId);
+    }
+
+    for (const userId of room.waitingParticipants.keys()) {
+      userIds.add(userId);
+    }
+
+    this.store.delete(roomId);
+    return [...userIds];
+  }
+
+  listExpiredMeetings(): Array<{ roomId: string; code: string }> {
+    return this.store.listExpiredSfuRooms().map((room) => ({
+      roomId: room.id,
+      code: room.code!,
     }));
   }
 

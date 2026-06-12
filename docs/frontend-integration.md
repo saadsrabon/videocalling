@@ -2,7 +2,7 @@
 
 > How to connect **any frontend** (React, Vue, Angular, plain HTML, mobile WebView) to the Video SDK backend.
 >
-> **Last updated:** 2026-06-12 · **API version:** `v1` · **Signaling version:** `1`
+> **Last updated:** 2026-06-10 · **API version:** `v1` · **Signaling version:** `1`
 
 ---
 
@@ -28,6 +28,7 @@ Use this table to jump to a section. **When you add a backend or SDK feature, ad
 | Screen share (meetings) | ✅ | [Group meetings (SFU)](#group-meetings-sfu) |
 | Meeting lobby (host admit) | ✅ | [Group meetings (SFU)](#group-meetings-sfu) |
 | In-meeting chat + emoji | ✅ | [Group meetings (SFU)](#group-meetings-sfu) |
+| Meeting time limit (optional) | ✅ | [Group meetings (SFU)](#group-meetings-sfu) |
 | Virtual backgrounds (client) | ✅ | [Virtual backgrounds](#virtual-backgrounds) |
 | Dev token endpoint | ✅ (dev only) | [Development helpers](#development-helpers) |
 | Recording | ❌ | — |
@@ -584,7 +585,7 @@ pnpm token user-b
 
 ### Why
 
-1:1 staff calls stay **P2P mesh**. Group meetings use an embedded **mediasoup SFU** so each participant sends one upstream and receives N downstream streams (up to **6 peers** on a small VPS).
+1:1 staff calls stay **P2P mesh**. Group meetings use an embedded **mediasoup SFU** so each participant sends one upstream and receives N downstream streams (up to **10 peers** by default).
 
 ### Create a meeting (staff JWT)
 
@@ -593,8 +594,13 @@ POST /v1/meetings
 Authorization: Bearer <staff-jwt>
 Content-Type: application/json
 
-{ "title": "Team standup" }
+{ "title": "Team standup", "durationMinutes": 60 }
 ```
+
+| Field | Required | Description |
+|-------|----------|-------------|
+| `title` | no | Display name for the meeting |
+| `durationMinutes` | no | Integer **1–480**. When set, the meeting auto-ends for everyone at `createdAt + duration`. Omit for no limit. |
 
 Response:
 
@@ -603,9 +609,15 @@ Response:
   "roomId": "uuid",
   "code": "AB12CD34",
   "joinUrl": "https://admin.simfree.io/meet/AB12CD34",
-  "maxParticipants": 6
+  "maxParticipants": 10,
+  "durationMinutes": 60,
+  "expiresAt": "2026-06-10T15:00:00.000Z"
 }
 ```
+
+Join responses (`POST .../join`, `GET .../:code`) also include `expiresAt` when a limit was set. New joins after expiry return **410** `meeting_expired`.
+
+A background watcher (every 15s) terminates expired meetings: broadcasts `meeting.ended`, tears down the SFU room, removes the in-memory room, and closes signaling sockets with code **4410**.
 
 Set `MEETING_BASE_URL` on the server so `joinUrl` matches your frontend.
 
@@ -644,6 +656,7 @@ Join response includes `status`: `"admitted"` (meeting creator / already admitte
 | `lobby.request` | Host notified of new waiter |
 | `lobby.admitted` | User may start camera + SFU |
 | `lobby.denied` | Host declined join |
+| `meeting.ended` | Meeting time limit reached (or future host end) |
 
 Host = meeting creator (`createdBy` from `POST /v1/meetings`).
 

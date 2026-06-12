@@ -27,6 +27,25 @@ function checkGuestRateLimit(ip: string): boolean {
   return true;
 }
 
+const MAX_MEETING_DURATION_MINUTES = 480;
+
+function parseDurationMinutes(value: unknown): number | undefined {
+  if (value === undefined || value === null || value === "") {
+    return undefined;
+  }
+
+  const minutes = typeof value === "number" ? value : Number(value);
+
+  if (!Number.isInteger(minutes) || minutes < 1 || minutes > MAX_MEETING_DURATION_MINUTES) {
+    throw new RoomError(
+      "invalid_duration",
+      `durationMinutes must be an integer from 1 to ${MAX_MEETING_DURATION_MINUTES}`,
+    );
+  }
+
+  return minutes;
+}
+
 function isSuperAdmin(user: { metadata?: Record<string, unknown> }): boolean {
   return user.metadata?.adminRole === "SUPER_ADMIN";
 }
@@ -53,11 +72,31 @@ const plugin: FastifyPluginAsync = async (app) => {
   app.post(
     "/v1/meetings",
     { preHandler: requireAuth },
-    async (request) => {
-      const body = (request.body ?? {}) as { title?: string };
+    async (request, reply) => {
+      const body = (request.body ?? {}) as {
+        title?: string;
+        durationMinutes?: unknown;
+      };
+
+      let durationMinutes: number | undefined;
+
+      try {
+        durationMinutes = parseDurationMinutes(body.durationMinutes);
+      } catch (error) {
+        if (error instanceof RoomError && error.code === "invalid_duration") {
+          return reply.code(400).send({
+            error: error.code,
+            message: error.message,
+          });
+        }
+
+        throw error;
+      }
+
       const meeting = app.roomService.createMeeting(
         request.user.userId,
         body.title?.trim() || undefined,
+        durationMinutes,
       );
 
       return {

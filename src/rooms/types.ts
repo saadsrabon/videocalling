@@ -30,9 +30,17 @@ export interface Room {
 }
 
 export interface RoomStore {
-  create(options?: { mode?: RoomMode; createdBy?: string; title?: string; code?: string }): Room;
+  create(options?: {
+    mode?: RoomMode;
+    createdBy?: string;
+    title?: string;
+    code?: string;
+    expiresAt?: Date;
+  }): Room;
   get(roomId: string): Room | undefined;
   getByCode(code: string): Room | undefined;
+  delete(roomId: string): boolean;
+  listExpiredSfuRooms(): Room[];
   addParticipant(
     roomId: string,
     userId: string,
@@ -59,6 +67,7 @@ export interface RoomStore {
     title?: string;
     hostUserId?: string;
     createdAt: Date;
+    expiresAt?: Date;
     participantCount: number;
     waitingCount: number;
   }>;
@@ -70,6 +79,7 @@ export type RoomErrorCode =
   | "room_full"
   | "meeting_not_found"
   | "meeting_expired"
+  | "invalid_duration"
   | "not_admitted"
   | "not_host"
   | "not_waiting"

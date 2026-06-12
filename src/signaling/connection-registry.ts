@@ -35,6 +35,30 @@ export class ConnectionRegistry {
     return this.byUserId.get(userId)?.socket;
   }
 
+  listUserIdsInRoom(roomId: string): string[] {
+    const userIds: string[] = [];
+
+    for (const [userId, meta] of this.byUserId) {
+      if (meta.roomId === roomId) {
+        userIds.push(userId);
+      }
+    }
+
+    return userIds;
+  }
+
+  broadcastToRoom(roomId: string, payload: string): number {
+    let sent = 0;
+
+    for (const userId of this.listUserIdsInRoom(roomId)) {
+      if (this.sendToUser(userId, payload)) {
+        sent += 1;
+      }
+    }
+
+    return sent;
+  }
+
   remove(userId: string, socket: WebSocket): void {
     const meta = this.byUserId.get(userId);
 
