@@ -1,11 +1,12 @@
 import {
+  AudioPresets,
   ConnectionState,
   Room,
   RoomEvent,
   Track,
-  createLocalTracks,
-  type RemoteTrack,
+  VideoPresets,
   type LocalTrack,
+  type RemoteTrack,
 } from "livekit-client";
 import type {
   GuestTokenResponse,
@@ -85,6 +86,29 @@ export class LiveKitMeetingClient {
   private lobbyAdmittedResolve: (() => void) | null = null;
   private lobbyAdmittedReject: ((error: Error) => void) | null = null;
   private closed = false;
+  private readonly remoteAudioElements = new Map<string, HTMLAudioElement>();
+
+  private static readonly audioCaptureOptions = {
+    autoGainControl: true,
+    echoCancellation: true,
+    noiseSuppression: true,
+  } as const;
+
+  private static createRoom(): Room {
+    return new Room({
+      adaptiveStream: true,
+      dynacast: true,
+      audioCaptureDefaults: LiveKitMeetingClient.audioCaptureOptions,
+      videoCaptureDefaults: {
+        resolution: VideoPresets.h720.resolution,
+      },
+      publishDefaults: {
+        audioPreset: AudioPresets.speech,
+        dtx: true,
+        red: true,
+      },
+    });
+  }
 
   private constructor(
     serverUrl: string,
@@ -132,6 +156,19 @@ export class LiveKitMeetingClient {
     return this.localStream;
   }
 
+  attachRemoteAudio(userId: string, element: HTMLAudioElement): void {
+    this.remoteAudioElements.set(userId, element);
+    element.autoplay = true;
+    element.setAttribute("playsinline", "true");
+
+    const participant = this.lkRoom?.remoteParticipants.get(userId);
+    const publication = participant?.getTrackPublication(Track.Source.Microphone);
+    const track = publication?.track;
+    if (track) {
+      track.attach(element);
+    }
+  }
+
   getDisplayName(userId: string): string {
     return this.roster.get(userId) ?? userId;
   }
@@ -156,7 +193,10 @@ export class LiveKitMeetingClient {
 
   setMicMuted(muted: boolean): void {
     this.micMuted = muted;
-    void this.lkRoom?.localParticipant.setMicrophoneEnabled(!muted);
+    void this.lkRoom?.localParticipant.setMicrophoneEnabled(
+      !muted,
+      LiveKitMeetingClient.audioCaptureOptions,
+    );
   }
 
   isMicMuted(): boolean {
@@ -319,6 +359,7 @@ export class LiveKitMeetingClient {
       track.stop();
     }
     this.localStream = null;
+    this.remoteAudioElements.clear();
 
     this.emit({ type: "connection-state", state: "disconnected" });
   }
@@ -671,9 +712,9 @@ export class LiveKitMeetingClient {
     }
 
     const payload = (await response.json()) as LiveKitTokenPayload;
-    const room = new Room({ adaptiveStream: true, dynacast: true });
+    const room = LiveKitMeetingClient.createRoom();
 
-    const emitTrack = (
+    const emitVideoTrack = (
       peerId: string,
       track: RemoteTrack | LocalTrack,
       source: MediaSource,
@@ -718,9 +759,27 @@ export class LiveKitMeetingClient {
     });
 
     room.on(RoomEvent.TrackSubscribed, (track, publication, participant) => {
+      if (track.kind === Track.Kind.Audio) {
+        const audioElement = this.remoteAudioElements.get(participant.identity);
+        if (audioElement) {
+          track.attach(audioElement);
+        }
+
+        const stream = new MediaStream([track.mediaStreamTrack]);
+        this.emit({
+          type: "track-added",
+          peerId: participant.identity,
+          kind: "audio",
+          source: "camera",
+          track: track.mediaStreamTrack,
+          stream,
+        });
+        return;
+      }
+
       const source: MediaSource =
         publication.source === Track.Source.ScreenShare ? "screen" : "camera";
-      emitTrack(participant.identity, track, source);
+      emitVideoTrack(participant.identity, track, source);
       this.emit({ type: "media-ready" });
     });
 
@@ -742,7 +801,7 @@ export class LiveKitMeetingClient {
       }
       if (publication.source === Track.Source.ScreenShare) {
         this.emit({ type: "screen-share-started" });
-        emitTrack(this._userId, track, "screen");
+        emitVideoTrack(this._userId, track, "screen");
       }
     });
 
@@ -771,6 +830,12 @@ export class LiveKitMeetingClient {
     ]);
     this.lkRoom = room;
 
+    try {
+      await room.startAudio();
+    } catch {
+      /* Browser may block until user gesture — tracks still attach. */
+    }
+
     if (this.ghostMode) {
       this.emit({ type: "media-ready" });
       return;
@@ -782,31 +847,36 @@ export class LiveKitMeetingClient {
   private async publishLocalMedia(room: Room): Promise<void> {
     let hasVideo = false;
     let hasAudio = false;
+    const captureOptions = LiveKitMeetingClient.audioCaptureOptions;
 
     try {
-      const tracks = await createLocalTracks({ audio: true, video: true });
-      this.localStream = new MediaStream();
-      for (const track of tracks) {
-        if (track.kind === Track.Kind.Audio) {
-          hasAudio = true;
-        }
-        if (track.kind === Track.Kind.Video) {
-          hasVideo = true;
-        }
-        this.localStream.addTrack(track.mediaStreamTrack);
-        await room.localParticipant.publishTrack(track);
+      await room.localParticipant.setMicrophoneEnabled(true, captureOptions);
+      this.micMuted = false;
+      hasAudio = true;
+
+      try {
+        await room.localParticipant.setCameraEnabled(true, {
+          resolution: VideoPresets.h720.resolution,
+        });
+        this.cameraOff = false;
+        hasVideo = true;
+      } catch {
+        this.cameraOff = true;
       }
-      this.emit({ type: "local-stream-ready", stream: this.localStream });
+
+      this.localStream = this.collectLocalMediaStream(room);
+      if (this.localStream) {
+        this.emit({ type: "local-stream-ready", stream: this.localStream });
+      }
     } catch {
       try {
-        const audioTracks = await createLocalTracks({ audio: true, video: false });
-        this.localStream = new MediaStream();
-        for (const track of audioTracks) {
-          hasAudio = true;
-          this.localStream.addTrack(track.mediaStreamTrack);
-          await room.localParticipant.publishTrack(track);
+        await room.localParticipant.setMicrophoneEnabled(true, captureOptions);
+        this.micMuted = false;
+        hasAudio = true;
+        this.localStream = this.collectLocalMediaStream(room);
+        if (this.localStream) {
+          this.emit({ type: "local-stream-ready", stream: this.localStream });
         }
-        this.emit({ type: "local-stream-ready", stream: this.localStream });
       } catch {
         this.localStream = null;
       }
@@ -823,6 +893,25 @@ export class LiveKitMeetingClient {
     }
 
     this.emit({ type: "media-ready" });
+  }
+
+  private collectLocalMediaStream(room: Room): MediaStream | null {
+    const stream = new MediaStream();
+    const micTrack = room.localParticipant.getTrackPublication(
+      Track.Source.Microphone,
+    )?.track?.mediaStreamTrack;
+    const cameraTrack = room.localParticipant.getTrackPublication(
+      Track.Source.Camera,
+    )?.track?.mediaStreamTrack;
+
+    if (micTrack) {
+      stream.addTrack(micTrack);
+    }
+    if (cameraTrack) {
+      stream.addTrack(cameraTrack);
+    }
+
+    return stream.getTracks().length > 0 ? stream : null;
   }
 
   private wsSend(payload: Record<string, unknown>): void {
