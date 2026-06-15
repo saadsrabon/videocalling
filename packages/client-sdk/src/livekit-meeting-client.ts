@@ -47,6 +47,12 @@ type ServerMessage =
       text: string;
       sentAt: string;
     }
+  | {
+      type: "meeting.ended";
+      roomId: string;
+      reason: "expired" | "ended";
+      message?: string;
+    }
   | { type: "error"; code: string; message: string };
 
 interface LiveKitTokenPayload {
@@ -73,6 +79,12 @@ export class LiveKitMeetingClient {
   private readonly roster = new Map<string, string>();
   private micMuted = false;
   private cameraOff = false;
+  private displayName = "";
+  private resolveSignalingIdentity: (() => void) | null = null;
+  private signalingIdentityReady: Promise<void> | null = null;
+  private lobbyAdmittedResolve: (() => void) | null = null;
+  private lobbyAdmittedReject: ((error: Error) => void) | null = null;
+  private closed = false;
 
   private constructor(
     serverUrl: string,
@@ -237,7 +249,13 @@ export class LiveKitMeetingClient {
   async join(options: MeetingClientJoinOptions): Promise<MeetingJoinResponse> {
     this.token = normalizeToken(options.token ?? (await this.getToken()));
     this.code = options.code;
+    this.displayName = options.displayName ?? "";
     this.ghostMode = options.ghostMode === true;
+
+    const tokenUserId = this.parseUserIdFromToken(this.token);
+    if (tokenUserId) {
+      this._userId = tokenUserId;
+    }
 
     const joinResponse = await this.httpJoin(options);
     this.roomId = joinResponse.roomId;
@@ -248,12 +266,25 @@ export class LiveKitMeetingClient {
     }
 
     await this.connectSignaling();
+    await this.waitForSignalingIdentity();
 
     if (joinResponse.status === "waiting") {
       this.emit({
         type: "lobby-waiting",
         roomId: joinResponse.roomId,
         hostUserId: joinResponse.hostUserId,
+      });
+      await this.waitForLobbyAdmitted();
+      await this.connectLiveKit(this.displayName);
+      const roster = this.getParticipantRoster();
+      this.emit({
+        type: "joined",
+        roomId: joinResponse.roomId,
+        participants: roster
+          .map((participant) => participant.userId)
+          .filter((userId) => userId !== this._userId),
+        roster,
+        hostUserId: this.hostUserId,
       });
       return joinResponse;
     }
@@ -271,6 +302,11 @@ export class LiveKitMeetingClient {
   }
 
   async leave(): Promise<void> {
+    this.closed = true;
+    this.lobbyAdmittedReject?.(new Error("Left the meeting"));
+    this.lobbyAdmittedResolve = null;
+    this.lobbyAdmittedReject = null;
+
     if (this.lkRoom) {
       await this.lkRoom.disconnect();
       this.lkRoom = null;
@@ -285,6 +321,77 @@ export class LiveKitMeetingClient {
     this.localStream = null;
 
     this.emit({ type: "connection-state", state: "disconnected" });
+  }
+
+  async endMeetingForAll(): Promise<void> {
+    if (!this.isHost) {
+      throw new Error("Only the meeting host can end the meeting for everyone");
+    }
+
+    const response = await fetch(
+      `${this.serverUrl}/v1/meetings/${encodeURIComponent(this.code)}/end`,
+      {
+        method: "POST",
+        headers: authHeaders(this.token),
+      },
+    );
+
+    if (!response.ok) {
+      throw new Error(`End meeting failed (${response.status})`);
+    }
+
+    await this.handleMeetingEnded("ended", "The host ended this meeting.");
+  }
+
+  private async handleMeetingEnded(
+    reason: "expired" | "ended",
+    message?: string,
+  ): Promise<void> {
+    if (this.closed) {
+      return;
+    }
+
+    this.emit({ type: "meeting-ended", reason, message });
+    await this.leave();
+  }
+
+  private waitForLobbyAdmitted(timeoutMs = 300_000): Promise<void> {
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        if (!this.lobbyAdmittedReject) {
+          return;
+        }
+
+        this.lobbyAdmittedResolve = null;
+        this.lobbyAdmittedReject = null;
+        reject(new Error("Timed out waiting for the host to admit you"));
+      }, timeoutMs);
+
+      this.lobbyAdmittedResolve = () => {
+        clearTimeout(timer);
+        resolve();
+      };
+      this.lobbyAdmittedReject = (error: Error) => {
+        clearTimeout(timer);
+        reject(error);
+      };
+    });
+  }
+
+  private emitJoinedFromLobby(message: Extract<
+    ServerMessage,
+    { type: "lobby.admitted" }
+  >): void {
+    for (const participant of message.roster) {
+      this.roster.set(participant.userId, participant.displayName);
+    }
+
+    this.emit({
+      type: "lobby-admitted",
+      roomId: message.roomId,
+      roster: message.roster,
+      hostUserId: message.hostUserId ?? this.hostUserId,
+    });
   }
 
   async toggleMic(enabled?: boolean): Promise<boolean> {
@@ -407,8 +514,13 @@ export class LiveKitMeetingClient {
   }
 
   private async connectSignaling(): Promise<void> {
+    this.signalingIdentityReady = new Promise((resolve) => {
+      this.resolveSignalingIdentity = resolve;
+    });
+
     const wsUrl = `${this.serverUrl.replace(/^http/, "ws")}/v1/signaling?token=${encodeURIComponent(this.token)}`;
     this.ws = new WebSocket(wsUrl);
+    const earlyMessages: string[] = [];
 
     await new Promise<void>((resolve, reject) => {
       if (!this.ws) {
@@ -416,6 +528,9 @@ export class LiveKitMeetingClient {
         return;
       }
 
+      this.ws.onmessage = (event) => {
+        earlyMessages.push(String(event.data));
+      };
       this.ws.onopen = () => resolve();
       this.ws.onerror = () => reject(new Error("Signaling connection failed"));
     });
@@ -423,6 +538,10 @@ export class LiveKitMeetingClient {
     this.ws.onmessage = (event) => {
       this.handleSignalingMessage(String(event.data));
     };
+
+    for (const raw of earlyMessages) {
+      this.handleSignalingMessage(raw);
+    }
   }
 
   private handleSignalingMessage(raw: string): void {
@@ -436,6 +555,8 @@ export class LiveKitMeetingClient {
     switch (message.type) {
       case "connected":
         this._userId = message.userId;
+        this.resolveSignalingIdentity?.();
+        this.resolveSignalingIdentity = null;
         this.emit({ type: "connected", userId: message.userId });
         this.wsSend({ type: "join", roomId: this.roomId, v: 1 });
         break;
@@ -449,7 +570,13 @@ export class LiveKitMeetingClient {
         break;
       case "lobby.admitted":
         this.joinStatus = "admitted";
-        void this.onAdmitted(message);
+        if (message.hostUserId !== undefined) {
+          this.hostUserId = message.hostUserId;
+        }
+        this.emitJoinedFromLobby(message);
+        this.lobbyAdmittedResolve?.();
+        this.lobbyAdmittedResolve = null;
+        this.lobbyAdmittedReject = null;
         break;
       case "lobby.denied":
         this.emit({
@@ -457,6 +584,11 @@ export class LiveKitMeetingClient {
           roomId: message.roomId,
           message: message.message,
         });
+        this.lobbyAdmittedReject?.(
+          new Error(message.message ?? "The host declined your request to join"),
+        );
+        this.lobbyAdmittedResolve = null;
+        this.lobbyAdmittedReject = null;
         break;
       case "lobby.request":
         this.emit({
@@ -481,30 +613,32 @@ export class LiveKitMeetingClient {
         this.emit({ type: "chat-message", ...chat });
         break;
       }
+      case "meeting.ended":
+        void this.handleMeetingEnded(message.reason, message.message);
+        break;
       default:
         break;
     }
   }
 
-  private async onAdmitted(message: Extract<
-    ServerMessage,
-    { type: "lobby.admitted" }
-  >): Promise<void> {
-    this.emit({
-      type: "lobby-admitted",
-      roomId: message.roomId,
-      roster: message.roster,
-      hostUserId: message.hostUserId ?? this.hostUserId,
-    });
+  private async waitForSignalingIdentity(timeoutMs = 10_000): Promise<void> {
+    if (this._userId) {
+      return;
+    }
 
-    await this.connectLiveKit();
-    this.emit({
-      type: "joined",
-      roomId: message.roomId,
-      participants: message.roster.map((p) => p.userId),
-      roster: message.roster,
-      hostUserId: message.hostUserId ?? this.hostUserId,
-    });
+    if (!this.signalingIdentityReady) {
+      return;
+    }
+
+    await Promise.race([
+      this.signalingIdentityReady,
+      new Promise<void>((_, reject) => {
+        setTimeout(
+          () => reject(new Error("Signaling identity timeout")),
+          timeoutMs,
+        );
+      }),
+    ]);
   }
 
   private async connectLiveKit(displayName?: string): Promise<void> {
@@ -626,18 +760,66 @@ export class LiveKitMeetingClient {
 
     this.emit({ type: "media-syncing" });
     this.emit({ type: "connection-state", state: "connecting" });
-    await room.connect(payload.server_url, payload.participant_token);
+    await Promise.race([
+      room.connect(payload.server_url, payload.participant_token),
+      new Promise<never>((_, reject) => {
+        setTimeout(
+          () => reject(new Error("LiveKit connection timed out")),
+          25_000,
+        );
+      }),
+    ]);
     this.lkRoom = room;
 
-    if (!this.ghostMode) {
+    if (this.ghostMode) {
+      this.emit({ type: "media-ready" });
+      return;
+    }
+
+    void this.publishLocalMedia(room);
+  }
+
+  private async publishLocalMedia(room: Room): Promise<void> {
+    let hasVideo = false;
+    let hasAudio = false;
+
+    try {
       const tracks = await createLocalTracks({ audio: true, video: true });
       this.localStream = new MediaStream();
       for (const track of tracks) {
+        if (track.kind === Track.Kind.Audio) {
+          hasAudio = true;
+        }
+        if (track.kind === Track.Kind.Video) {
+          hasVideo = true;
+        }
         this.localStream.addTrack(track.mediaStreamTrack);
         await room.localParticipant.publishTrack(track);
-        emitTrack(this._userId, track, "camera");
       }
       this.emit({ type: "local-stream-ready", stream: this.localStream });
+    } catch {
+      try {
+        const audioTracks = await createLocalTracks({ audio: true, video: false });
+        this.localStream = new MediaStream();
+        for (const track of audioTracks) {
+          hasAudio = true;
+          this.localStream.addTrack(track.mediaStreamTrack);
+          await room.localParticipant.publishTrack(track);
+        }
+        this.emit({ type: "local-stream-ready", stream: this.localStream });
+      } catch {
+        this.localStream = null;
+      }
+
+      this.emit({
+        type: "local-media-fallback",
+        hasVideo,
+        hasAudio,
+        message:
+          hasAudio || hasVideo
+            ? "Some media devices could not be accessed."
+            : "Camera and microphone are unavailable. You can still listen and chat.",
+      });
     }
 
     this.emit({ type: "media-ready" });
@@ -655,6 +837,19 @@ export class LiveKitMeetingClient {
       return payload.role === "guest";
     } catch {
       return false;
+    }
+  }
+
+  private parseUserIdFromToken(token: string): string | null {
+    try {
+      const payload = JSON.parse(atob(token.split(".")[1] ?? "")) as {
+        userId?: string;
+        sub?: string;
+      };
+      const userId = payload.userId ?? payload.sub;
+      return typeof userId === "string" && userId.length > 0 ? userId : null;
+    } catch {
+      return null;
     }
   }
 }

@@ -8,6 +8,7 @@ import { notifyHostOfWaitingRequest } from "../signaling/handlers/lobby.js";
 import { RoomError, type JoinStatus } from "../rooms/types.js";
 import type { RoomService } from "../rooms/room-service.js";
 import type { ConnectionRegistry } from "../signaling/connection-registry.js";
+import { terminateMeetingSession } from "../rooms/meeting-terminate.js";
 
 function notifyHostIfWaiting(
   app: { roomService: RoomService; signalingRegistry: ConnectionRegistry },
@@ -251,6 +252,47 @@ const plugin: FastifyPluginAsync = async (app) => {
     },
   );
 
+  app.post(
+    "/v1/meetings/:code/end",
+    { preHandler: requireAuth },
+    async (request, reply) => {
+      const { code } = request.params as { code: string };
+
+      try {
+        const meeting = app.roomService.getMeetingByCode(code);
+
+        if (!app.roomService.isHost(meeting.roomId, request.user.userId)) {
+          return reply.code(403).send({
+            error: "not_host",
+            message: "Only the meeting host can end the meeting for everyone",
+          });
+        }
+
+        terminateMeetingSession({
+          roomId: meeting.roomId,
+          roomService: app.roomService,
+          sfuService: app.sfuService,
+          registry: app.signalingRegistry,
+          liveKitRoomAdmin: app.liveKitRoomAdmin,
+          reason: "ended",
+          message: "The host ended this meeting.",
+        });
+
+        return { ok: true, roomId: meeting.roomId, code: meeting.code };
+      } catch (error) {
+        if (error instanceof RoomError) {
+          const status = error.code === "meeting_expired" ? 410 : 404;
+          return reply.code(status).send({
+            error: error.code,
+            message: error.message,
+          });
+        }
+
+        throw error;
+      }
+    },
+  );
+
   app.post("/v1/meetings/:code/guest-token", async (request, reply) => {
     const ip = request.ip;
     if (!checkGuestRateLimit(ip)) {
@@ -386,5 +428,5 @@ const plugin: FastifyPluginAsync = async (app) => {
 
 export const meetingRoutes = fp(plugin, {
   name: "meeting-routes",
-  dependencies: ["rooms-plugin", "signaling-plugin"],
+  dependencies: ["rooms-plugin", "signaling-plugin", "sfu-plugin", "livekit-plugin"],
 });

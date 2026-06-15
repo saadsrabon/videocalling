@@ -38,6 +38,7 @@ const plugin: FastifyPluginAsync = async (app) => {
     roomService: app.roomService,
     sfuService: app.sfuService,
     registry,
+    liveKitRoomAdmin: app.liveKitRoomAdmin,
     log: app.log,
   });
 

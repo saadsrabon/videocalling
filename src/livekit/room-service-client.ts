@@ -53,4 +53,12 @@ export class LiveKitRoomAdmin {
 
     await this.client.removeParticipant(roomName, identity);
   }
+
+  async deleteRoom(roomName: string): Promise<void> {
+    if (!this.client) {
+      return;
+    }
+
+    await this.client.deleteRoom(roomName);
+  }
 }
