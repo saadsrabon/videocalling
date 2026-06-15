@@ -4,6 +4,9 @@ export type NodeEnv = "development" | "production" | "test";
 
 export type AuthMode = "jwt" | "session";
 
+/** Which media stack clients should use. `both` keeps mediasoup + LiveKit available. */
+export type MediaBackend = "mediasoup" | "livekit" | "both";
+
 export interface AppConfig {
   port: number;
   host: string;
@@ -24,6 +27,13 @@ export interface AppConfig {
   sfuMaxPeers: number;
   meetingBaseUrl: string;
   guestJwtTtlSeconds: number;
+  mediaBackend: MediaBackend;
+  livekitEnabled: boolean;
+  livekitUrl: string;
+  livekitInternalUrl: string;
+  livekitApiKey: string;
+  livekitApiSecret: string;
+  livekitTokenTtlSeconds: number;
 }
 
 function parsePort(value: string | undefined): number {
@@ -253,10 +263,50 @@ function parseMeetingBaseUrl(value: string | undefined): string {
   return value.trim().replace(/\/$/, "");
 }
 
+function parseMediaBackend(value: string | undefined): MediaBackend {
+  if (value === undefined || value.trim() === "") {
+    return "mediasoup";
+  }
+
+  if (value === "mediasoup" || value === "livekit" || value === "both") {
+    return value;
+  }
+
+  throw new Error(
+    `Invalid MEDIA_BACKEND: "${value}". Must be mediasoup, livekit, or both.`,
+  );
+}
+
+function parseLiveKitUrl(value: string | undefined): string {
+  if (value === undefined || value.trim() === "") {
+    return "";
+  }
+
+  return value.trim().replace(/\/$/, "");
+}
+
+function parseOptionalSecret(value: string | undefined): string {
+  if (value === undefined) {
+    return "";
+  }
+
+  return value.trim();
+}
+
 /** Loaded once at startup — import this instead of reading process.env elsewhere. */
 const nodeEnv = parseNodeEnv(process.env.NODE_ENV);
 const authMode = parseAuthMode(process.env.AUTH_MODE);
 const turnUrls = parseTurnUrls(process.env.TURN_URL);
+const mediaBackend = parseMediaBackend(process.env.MEDIA_BACKEND);
+const livekitEnabled =
+  mediaBackend === "livekit" ||
+  mediaBackend === "both" ||
+  process.env.LIVEKIT_ENABLED === "true" ||
+  process.env.LIVEKIT_ENABLED === "1";
+const livekitUrl = parseLiveKitUrl(process.env.LIVEKIT_URL);
+const livekitInternalUrl = parseLiveKitUrl(
+  process.env.LIVEKIT_INTERNAL_URL ?? "http://127.0.0.1:7880",
+);
 
 export const config: AppConfig = {
   port: parsePort(process.env.PORT),
@@ -290,5 +340,16 @@ export const config: AppConfig = {
     process.env.GUEST_JWT_TTL_SECONDS,
     3600,
     "GUEST_JWT_TTL_SECONDS",
+  ),
+  mediaBackend,
+  livekitEnabled,
+  livekitUrl,
+  livekitInternalUrl,
+  livekitApiKey: parseOptionalSecret(process.env.LIVEKIT_API_KEY),
+  livekitApiSecret: parseOptionalSecret(process.env.LIVEKIT_API_SECRET),
+  livekitTokenTtlSeconds: parsePositiveInt(
+    process.env.LIVEKIT_TOKEN_TTL_SECONDS,
+    3600,
+    "LIVEKIT_TOKEN_TTL_SECONDS",
   ),
 };

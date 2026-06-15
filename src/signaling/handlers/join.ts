@@ -1,4 +1,5 @@
 import type { AuthUser } from "../../auth/types.js";
+import type { LiveKitRoomAdmin } from "../../livekit/room-service-client.js";
 import type { RoomService } from "../../rooms/room-service.js";
 import type { SfuService } from "../../sfu/sfu-service.js";
 import type { ConnectionRegistry } from "../connection-registry.js";
@@ -14,6 +15,8 @@ export interface SignalingContext {
   roomService: RoomService;
   registry: ConnectionRegistry;
   sfuService: SfuService;
+  liveKitRoomAdmin?: LiveKitRoomAdmin;
+  useLiveKit?: boolean;
   send: (payload: string) => void;
 }
 

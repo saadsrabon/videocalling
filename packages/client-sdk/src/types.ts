@@ -106,6 +106,8 @@ export interface MeetingJoinResponse {
   alreadyJoined: boolean;
   ghost?: boolean;
   expiresAt?: string;
+  mediaBackend?: "mediasoup" | "livekit" | "both";
+  livekitUrl?: string;
 }
 
 export interface ActiveMeetingSummary {

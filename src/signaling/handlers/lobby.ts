@@ -53,7 +53,20 @@ export async function handleLobbyAdmit(
     );
 
     const participantCount = ctx.roomService.listParticipantIds(roomId).length;
-    await ctx.sfuService.joinPeer(roomId, targetUserId, participantCount);
+
+    if (!ctx.useLiveKit) {
+      await ctx.sfuService.joinPeer(roomId, targetUserId, participantCount);
+    } else if (ctx.liveKitRoomAdmin?.isConfigured) {
+      try {
+        await ctx.liveKitRoomAdmin.updateParticipantPermissions(
+          roomId,
+          targetUserId,
+          true,
+        );
+      } catch {
+        /* Participant may not be in LiveKit yet — client will fetch a fresh token. */
+      }
+    }
 
     sendMessage(ctx.send, {
       type: "lobby.admitted",

@@ -1,0 +1,25 @@
+# LiveKit self-hosted stack for video server (147.79.71.98)
+# Run from repo: cd deploy/livekit && docker compose up -d
+#
+# Generate API keys first:
+#   docker run --rm livekit/livekit-server generate-keys
+# Copy keys into /var/www/videocalling/.env (LIVEKIT_API_KEY / LIVEKIT_API_SECRET)
+
+services:
+  redis:
+    image: redis:7-alpine
+    command: redis-server /etc/redis.conf
+    volumes:
+      - ./redis.conf:/etc/redis.conf:ro
+    restart: unless-stopped
+    network_mode: host
+
+  livekit:
+    image: livekit/livekit-server:latest
+    command: --config /etc/livekit.yaml
+    volumes:
+      - ./livekit.yaml:/etc/livekit.yaml:ro
+    depends_on:
+      - redis
+    restart: unless-stopped
+    network_mode: host

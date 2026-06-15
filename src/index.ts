@@ -7,11 +7,13 @@ import { buildClientIceConfig } from "./config/ice-service.js";
 import { authPlugin } from "./plugins/auth.plugin.js";
 import { roomsPlugin } from "./plugins/rooms.plugin.js";
 import { sfuPlugin } from "./plugins/sfu.plugin.js";
+import { livekitPlugin } from "./plugins/livekit.plugin.js";
 import { signalingPlugin } from "./plugins/signaling.plugin.js";
 import { devTokenRoutes } from "./routes/dev-token.js";
 import { healthRoutes } from "./routes/health.js";
 import { iceServerRoutes } from "./routes/ice-servers.js";
 import { meetingRoutes } from "./routes/meetings.js";
+import { livekitRoutes } from "./routes/livekit.js";
 import { meRoutes } from "./routes/me.js";
 import { roomRoutes } from "./routes/rooms.js";
 
@@ -52,6 +54,7 @@ async function start() {
 
     await app.register(authPlugin, { adapter: authAdapter });
     await app.register(roomsPlugin);
+    await app.register(livekitPlugin);
     await app.register(sfuPlugin);
     await app.register(healthRoutes);
     await app.register(iceServerRoutes);
@@ -59,6 +62,7 @@ async function start() {
     await app.register(roomRoutes);
     await app.register(signalingPlugin);
     await app.register(meetingRoutes);
+    await app.register(livekitRoutes);
     await app.listen({ port: config.port, host: config.host });
   } catch (error) {
     app.log.error(error);

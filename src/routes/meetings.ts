@@ -70,6 +70,16 @@ function isSuperAdmin(user: { metadata?: Record<string, unknown> }): boolean {
   return user.metadata?.adminRole === "SUPER_ADMIN";
 }
 
+function enrichJoinResponse<T extends Record<string, unknown>>(payload: T) {
+  return {
+    ...payload,
+    mediaBackend: config.mediaBackend,
+    ...(config.livekitEnabled && config.livekitUrl
+      ? { livekitUrl: config.livekitUrl }
+      : {}),
+  };
+}
+
 const plugin: FastifyPluginAsync = async (app) => {
   app.get(
     "/v1/meetings",
@@ -221,7 +231,7 @@ const plugin: FastifyPluginAsync = async (app) => {
           request.user.userId,
           result.status,
         );
-        return result;
+        return enrichJoinResponse(result);
       } catch (error) {
         if (error instanceof RoomError) {
           const status =
@@ -354,7 +364,7 @@ const plugin: FastifyPluginAsync = async (app) => {
         authResult.user.userId,
         result.status,
       );
-      return result;
+      return enrichJoinResponse(result);
     } catch (error) {
       if (error instanceof RoomError) {
         const status =

@@ -1,0 +1,25 @@
+# LiveKit server config — video VPS (147.79.71.98)
+# Replace API keys before deploy (must match videocalling .env LIVEKIT_API_*)
+#
+# Signaling: browsers reach wss://admin.simfree.io/livekit via app-server nginx
+# Media UDP: 50000-60000 direct to this VPS public IP (open in cloud firewall)
+
+port: 7880
+log_level: info
+
+rtc:
+  tcp_port: 7881
+  port_range_start: 50000
+  port_range_end: 60000
+  use_external_ip: true
+
+redis:
+  address: 127.0.0.1:6379
+
+keys:
+  # api_key: api_secret
+  devkey: devsecret-change-me-in-production-min-32-chars!!
+
+turn:
+  enabled: true
+  udp_port: 3478

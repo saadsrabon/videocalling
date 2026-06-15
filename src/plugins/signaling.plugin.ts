@@ -1,14 +1,13 @@
 import websocket from "@fastify/websocket";
 import type { FastifyPluginAsync } from "fastify";
 import fp from "fastify-plugin";
+import { config } from "../config/env.js";
 import { authenticateConnection } from "../signaling/auth.js";
 import { ConnectionRegistry } from "../signaling/connection-registry.js";
 import { routeSignalingMessage } from "../signaling/router.js";
 import { sendMessage } from "../signaling/message-types.js";
-import {
-  broadcastSfuEvent,
-  type SignalingContext,
-} from "../signaling/handlers/sfu.js";
+import { broadcastSfuEvent } from "../signaling/handlers/sfu.js";
+import type { SignalingContext } from "../signaling/handlers/join.js";
 import { handlePeerDisconnect } from "../signaling/handlers/join.js";
 import { startMeetingExpiryWatcher } from "../rooms/meeting-expiry.js";
 
@@ -84,6 +83,11 @@ const plugin: FastifyPluginAsync = async (app) => {
           roomService: app.roomService,
           registry,
           sfuService: app.sfuService,
+          liveKitRoomAdmin: app.liveKitRoomAdmin,
+          useLiveKit:
+            config.livekitEnabled &&
+            (config.mediaBackend === "livekit" ||
+              config.mediaBackend === "both"),
           send: (payload: string) => {
             if (socket.readyState === socket.OPEN) {
               socket.send(payload);
@@ -126,5 +130,5 @@ const plugin: FastifyPluginAsync = async (app) => {
 
 export const signalingPlugin = fp(plugin, {
   name: "signaling-plugin",
-  dependencies: ["auth-plugin", "rooms-plugin", "sfu-plugin"],
+  dependencies: ["auth-plugin", "rooms-plugin", "sfu-plugin", "livekit-plugin"],
 });
