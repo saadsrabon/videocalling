@@ -391,7 +391,7 @@ export class MeetingClient {
   private readonly producerIndex = new Map<string, string>();
   private readonly remoteAudioProducerByPeer = new Map<string, string>();
   private readonly pendingConsumes: PendingConsume[] = [];
-  private deferredCameraTimer: ReturnType<typeof setTimeout> | null = null;
+  private deferredCameraTimer: number | null = null;
   private joinOptions: MeetingClientJoinOptions | null = null;
   private intentionalLeave = false;
   private reconnectAttempts = 0;
@@ -1760,8 +1760,8 @@ export class MeetingClient {
   }
 
   private clearDeferredCameraRetry(): void {
-    if (this.deferredCameraTimer) {
-      clearTimeout(this.deferredCameraTimer);
+    if (this.deferredCameraTimer !== null) {
+      window.clearTimeout(this.deferredCameraTimer);
       this.deferredCameraTimer = null;
     }
   }
