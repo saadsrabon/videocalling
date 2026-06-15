@@ -7,7 +7,7 @@ REPO_DIR="${REPO_DIR:-$HOME/videocalling}"
 REPO_URL="${REPO_URL:-https://github.com/saadsrabon/videocalling.git}"
 JWT_SECRET="${JWT_SECRET:-prod-video-jwt-secret-simfree-2026-min-32-chars}"
 TURN_SECRET="${TURN_SECRET:-a4e94a0073cd55d7e6644820ce013bfc376ea5ce6d6e03411c4c58d2ca21e221}"
-PUBLIC_IP="${PUBLIC_IP:-3.73.242.203}"
+PUBLIC_IP="${PUBLIC_IP:?Set PUBLIC_IP to this video server's public IP (e.g. 147.79.71.98)}"
 MEDIASOUP_PORT="${MEDIASOUP_PORT:-40000}"
 MEETING_BASE_URL="${MEETING_BASE_URL:-https://admin.simfree.io/meet}"
 

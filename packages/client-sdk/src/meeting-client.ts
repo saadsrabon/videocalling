@@ -460,8 +460,14 @@ export class MeetingClient {
     return (await response.json()) as GuestTokenResponse;
   }
 
-  static async join(options: MeetingClientJoinOptions): Promise<MeetingClient> {
+  static async join(
+    options: MeetingClientJoinOptions,
+    onEvent?: MeetingClientEventHandler,
+  ): Promise<MeetingClient> {
     const client = new MeetingClient(options);
+    if (onEvent) {
+      client.on(onEvent);
+    }
     await client.connectAndJoin(options);
     return client;
   }
@@ -1154,8 +1160,35 @@ export class MeetingClient {
 
     void ((await iceResponse.json()) as IceServersResponse);
 
-    await this.startMediasoupSession();
+    this.emitConnectionState("connecting", "Connecting media to video server…");
+    await this.withTimeout(
+      this.startMediasoupSession(),
+      45_000,
+      "Media session timed out — check video server MEDIASOUP_ANNOUNCED_IP (must be 147.79.71.98) and open UDP/TCP ports 40000–40100 on that server.",
+    );
     this.emitConnectionState("connected");
+  }
+
+  private withTimeout<T>(
+    promise: Promise<T>,
+    timeoutMs: number,
+    message: string,
+  ): Promise<T> {
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        reject(new Error(message));
+      }, timeoutMs);
+
+      promise
+        .then((value) => {
+          clearTimeout(timer);
+          resolve(value);
+        })
+        .catch((error) => {
+          clearTimeout(timer);
+          reject(error instanceof Error ? error : new Error(String(error)));
+        });
+    });
   }
 
   private async httpJoin(
