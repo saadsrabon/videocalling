@@ -1,6 +1,7 @@
 import {
   AudioPresets,
   ConnectionState,
+  LocalVideoTrack,
   Room,
   RoomEvent,
   Track,
@@ -8,7 +9,13 @@ import {
   type LocalTrack,
   type RemoteTrack,
 } from "livekit-client";
+import {
+  BackgroundProcessor,
+  supportsBackgroundProcessors,
+  type BackgroundProcessorWrapper,
+} from "@livekit/track-processors";
 import type {
+  BackgroundEffectMode,
   GuestTokenResponse,
   MediaSource,
   MeetingChatMessage,
@@ -101,6 +108,10 @@ export class LiveKitMeetingClient {
   private readonly seenRemotePeerIds = new Set<string>();
   private closed = false;
   private readonly remoteAudioElements = new Map<string, HTMLAudioElement>();
+  private waitingLiveKitPreconnected = false;
+  private admissionPollTimer: ReturnType<typeof setInterval> | null = null;
+  private backgroundProcessor: BackgroundProcessorWrapper | null = null;
+  private backgroundEffectMode: BackgroundEffectMode = "none";
 
   private static readonly audioCaptureOptions = {
     autoGainControl: true,
@@ -253,6 +264,61 @@ export class LiveKitMeetingClient {
     }
   }
 
+  async setBackgroundEffect(
+    mode: BackgroundEffectMode,
+    imageUrl?: string,
+  ): Promise<void> {
+    if (!supportsBackgroundProcessors()) {
+      throw new Error("Background effects are not supported in this browser");
+    }
+
+    const videoTrack = this.getLocalCameraTrack();
+    if (!videoTrack) {
+      throw new Error("Turn on your camera before applying a background effect");
+    }
+
+    if (!this.backgroundProcessor) {
+      this.backgroundProcessor = BackgroundProcessor({ mode: "disabled" });
+      await videoTrack.setProcessor(this.backgroundProcessor);
+    }
+
+    if (mode === "none") {
+      await this.backgroundProcessor.switchTo({ mode: "disabled" });
+      this.backgroundEffectMode = "none";
+      return;
+    }
+
+    if (mode === "blur") {
+      await this.backgroundProcessor.switchTo({
+        mode: "background-blur",
+        blurRadius: 12,
+      });
+      this.backgroundEffectMode = "blur";
+      return;
+    }
+
+    if (!imageUrl?.trim()) {
+      throw new Error("Background image URL is required");
+    }
+
+    await this.backgroundProcessor.switchTo({
+      mode: "virtual-background",
+      imagePath: imageUrl.trim(),
+    });
+    this.backgroundEffectMode = "image";
+  }
+
+  getBackgroundEffectMode(): BackgroundEffectMode {
+    return this.backgroundEffectMode;
+  }
+
+  private getLocalCameraTrack(): LocalVideoTrack | null {
+    const track = this.lkRoom?.localParticipant.getTrackPublication(
+      Track.Source.Camera,
+    )?.track;
+    return track instanceof LocalVideoTrack ? track : null;
+  }
+
   private emit(event: MeetingClientEvent): void {
     for (const handler of this.handlers) {
       handler(event);
@@ -331,8 +397,14 @@ export class LiveKitMeetingClient {
     await this.waitForSignalingIdentity();
 
     if (lobbyAdmittedPromise) {
-      await lobbyAdmittedPromise;
-      await this.connectLiveKit(this.displayName);
+      this.startAdmissionPoll();
+      void this.preconnectLiveKitWhileWaiting(this.displayName);
+      try {
+        await lobbyAdmittedPromise;
+        await this.activateLiveKitAfterAdmit(this.displayName);
+      } finally {
+        this.stopAdmissionPoll();
+      }
       const roster = this.getParticipantRoster();
       this.emit({
         type: "joined",
@@ -346,7 +418,10 @@ export class LiveKitMeetingClient {
       return joinResponse;
     }
 
-    await this.connectLiveKit(options.displayName);
+    await this.connectLiveKitRoom({
+      displayName: options.displayName,
+      allowPublish: true,
+    });
     this.emit({
       type: "joined",
       roomId: joinResponse.roomId,
@@ -360,7 +435,11 @@ export class LiveKitMeetingClient {
 
   async leave(): Promise<void> {
     this.closed = true;
+    this.stopAdmissionPoll();
     this.lobbyAdmittedPending = false;
+    this.waitingLiveKitPreconnected = false;
+    this.backgroundProcessor = null;
+    this.backgroundEffectMode = "none";
     this.seenRemotePeerIds.clear();
     this.lobbyAdmittedReject?.(new Error("Left the meeting"));
     this.lobbyAdmittedResolve = null;
@@ -477,12 +556,21 @@ export class LiveKitMeetingClient {
   private handleSignalingJoined(
     message: Extract<ServerMessage, { type: "joined" }>,
   ): void {
+    const wasWaiting = this.joinStatus === "waiting";
     this.roomId = message.roomId;
     this.joinStatus = "admitted";
     if (message.hostUserId !== undefined) {
       this.hostUserId = message.hostUserId;
     }
     this.applySignalingRoster(message.roster);
+    if (wasWaiting) {
+      this.emit({
+        type: "lobby-admitted",
+        roomId: message.roomId,
+        roster: message.roster,
+        hostUserId: message.hostUserId ?? this.hostUserId,
+      });
+    }
     this.resolveLobbyAdmission();
   }
 
@@ -698,6 +786,7 @@ export class LiveKitMeetingClient {
         }
         this.emitJoinedFromLobby(message);
         this.resolveLobbyAdmission();
+        this.stopAdmissionPoll();
         break;
       case "lobby.denied":
         this.emit({
@@ -766,11 +855,43 @@ export class LiveKitMeetingClient {
     ]);
   }
 
-  private async connectLiveKit(displayName?: string): Promise<void> {
-    if (this.joinStatus !== "admitted") {
+  private startAdmissionPoll(): void {
+    this.stopAdmissionPoll();
+    void this.checkAdmissionStatus();
+
+    this.admissionPollTimer = setInterval(() => {
+      void this.checkAdmissionStatus();
+    }, 1_200);
+  }
+
+  private stopAdmissionPoll(): void {
+    if (this.admissionPollTimer) {
+      clearInterval(this.admissionPollTimer);
+      this.admissionPollTimer = null;
+    }
+  }
+
+  private async checkAdmissionStatus(): Promise<void> {
+    if (this.closed || this.joinStatus !== "waiting") {
+      this.stopAdmissionPoll();
       return;
     }
 
+    try {
+      const payload = await this.fetchLiveKitTokenPayload(this.displayName);
+      if (payload.status === "admitted") {
+        this.joinStatus = "admitted";
+        this.resolveLobbyAdmission();
+        this.stopAdmissionPoll();
+      }
+    } catch {
+      /* Ignore transient poll failures. */
+    }
+  }
+
+  private async fetchLiveKitTokenPayload(
+    displayName?: string,
+  ): Promise<LiveKitTokenPayload & { roomId?: string; code?: string }> {
     const isGuest = this.isGuestToken(this.token);
     const tokenPath = isGuest
       ? `/v1/meetings/${encodeURIComponent(this.code)}/guest-livekit-token`
@@ -795,9 +916,57 @@ export class LiveKitMeetingClient {
       throw new Error(`LiveKit token failed (${response.status})`);
     }
 
-    const payload = (await response.json()) as LiveKitTokenPayload;
-    const room = LiveKitMeetingClient.createRoom();
+    return (await response.json()) as LiveKitTokenPayload & {
+      roomId?: string;
+      code?: string;
+    };
+  }
 
+  private async preconnectLiveKitWhileWaiting(displayName?: string): Promise<void> {
+    if (this.joinStatus !== "waiting" || this.lkRoom || this.closed) {
+      return;
+    }
+
+    try {
+      await this.connectLiveKitRoom({
+        displayName,
+        allowPublish: false,
+      });
+      this.waitingLiveKitPreconnected = true;
+    } catch {
+      this.waitingLiveKitPreconnected = false;
+    }
+  }
+
+  private async activateLiveKitAfterAdmit(displayName?: string): Promise<void> {
+    this.joinStatus = "admitted";
+
+    if (
+      this.lkRoom?.state === ConnectionState.Connected &&
+      this.waitingLiveKitPreconnected
+    ) {
+      try {
+        if (!this.ghostMode) {
+          await this.publishLocalMedia(this.lkRoom);
+        } else {
+          this.emit({ type: "media-ready" });
+        }
+        this.waitingLiveKitPreconnected = false;
+        return;
+      } catch {
+        await this.lkRoom.disconnect();
+        this.lkRoom = null;
+        this.waitingLiveKitPreconnected = false;
+      }
+    }
+
+    await this.connectLiveKitRoom({
+      displayName,
+      allowPublish: true,
+    });
+  }
+
+  private attachLiveKitRoomHandlers(room: Room): void {
     const emitVideoTrack = (
       peerId: string,
       track: RemoteTrack | LocalTrack,
@@ -894,6 +1063,22 @@ export class LiveKitMeetingClient {
         });
       }
     });
+  }
+
+  private async connectLiveKitRoom(options: {
+    displayName?: string;
+    allowPublish: boolean;
+  }): Promise<void> {
+    if (this.lkRoom?.state === ConnectionState.Connected) {
+      if (options.allowPublish && !this.ghostMode) {
+        await this.publishLocalMedia(this.lkRoom);
+      }
+      return;
+    }
+
+    const payload = await this.fetchLiveKitTokenPayload(options.displayName);
+    const room = LiveKitMeetingClient.createRoom();
+    this.attachLiveKitRoomHandlers(room);
 
     this.emit({ type: "media-syncing" });
     this.emit({ type: "connection-state", state: "connecting" });
@@ -914,12 +1099,30 @@ export class LiveKitMeetingClient {
       /* Browser may block until user gesture — tracks still attach. */
     }
 
-    if (this.ghostMode) {
+    if (!options.allowPublish || this.ghostMode) {
       this.emit({ type: "media-ready" });
       return;
     }
 
-    void this.publishLocalMedia(room);
+    await this.publishLocalMedia(room);
+  }
+
+  private async initBackgroundProcessor(): Promise<void> {
+    if (
+      this.ghostMode ||
+      this.backgroundProcessor ||
+      !supportsBackgroundProcessors()
+    ) {
+      return;
+    }
+
+    const videoTrack = this.getLocalCameraTrack();
+    if (!videoTrack) {
+      return;
+    }
+
+    this.backgroundProcessor = BackgroundProcessor({ mode: "disabled" });
+    await videoTrack.setProcessor(this.backgroundProcessor);
   }
 
   private async publishLocalMedia(room: Room): Promise<void> {
@@ -946,6 +1149,8 @@ export class LiveKitMeetingClient {
       if (this.localStream) {
         this.emit({ type: "local-stream-ready", stream: this.localStream });
       }
+
+      await this.initBackgroundProcessor();
     } catch {
       try {
         await room.localParticipant.setMicrophoneEnabled(true, captureOptions);

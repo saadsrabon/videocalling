@@ -17,6 +17,7 @@ export type {
   MeetingCreateResponse,
   MeetingJoinResponse,
   MeetingJoinStatus,
+  BackgroundEffectMode,
   ActiveMeetingSummary,
   ActiveMeetingsResponse,
   ParticipantInfo,

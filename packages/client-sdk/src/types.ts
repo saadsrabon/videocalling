@@ -91,6 +91,8 @@ export interface MeetingCreateResponse {
 
 export type MeetingJoinStatus = "admitted" | "waiting";
 
+export type BackgroundEffectMode = "none" | "blur" | "image";
+
 export interface ParticipantInfo {
   userId: string;
   displayName: string;
