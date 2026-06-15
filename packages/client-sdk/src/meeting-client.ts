@@ -356,7 +356,6 @@ export class MeetingClient {
   private readonly code: string;
   private readonly displayName?: string;
   private readonly ghostMode: boolean;
-  private recvTransportConnected: Promise<void> | null = null;
   private readonly handlers = new Set<MeetingClientEventHandler>();
 
   private ws: WebSocket | null = null;
@@ -392,6 +391,7 @@ export class MeetingClient {
   private readonly remoteAudioProducerByPeer = new Map<string, string>();
   private readonly pendingConsumes: PendingConsume[] = [];
   private deferredCameraTimer: number | null = null;
+  private iceServers: RTCIceServer[] = [];
   private joinOptions: MeetingClientJoinOptions | null = null;
   private intentionalLeave = false;
   private reconnectAttempts = 0;
@@ -720,8 +720,6 @@ export class MeetingClient {
     this.emit({ type: "media-syncing" });
 
     try {
-      await this.waitForRecvTransportConnected();
-
       const existingProducers = await this.listExistingProducers();
       const missing = existingProducers.filter(
         (producer) => !this.remoteTracks.has(producer.producerId),
@@ -1044,52 +1042,6 @@ export class MeetingClient {
       producerId,
       source: meta.source,
     });
-  }
-
-  private waitForRecvTransportConnected(timeoutMs = 25000): Promise<void> {
-    if (!this.recvTransport) {
-      return Promise.resolve();
-    }
-
-    if (this.recvTransport.connectionState === "connected") {
-      return Promise.resolve();
-    }
-
-    if (!this.recvTransportConnected) {
-      this.recvTransportConnected = new Promise((resolve, reject) => {
-        const transport = this.recvTransport!;
-
-        const timeout = window.setTimeout(() => {
-          cleanup();
-          reject(new Error("Receive transport connection timed out"));
-        }, timeoutMs);
-
-        const onStateChange = (state: string) => {
-          if (state === "connected") {
-            cleanup();
-            resolve();
-          } else if (state === "failed" || state === "closed") {
-            cleanup();
-            reject(new Error(`Receive transport ${state}`));
-          }
-        };
-
-        const cleanup = () => {
-          window.clearTimeout(timeout);
-          transport.off("connectionstatechange", onStateChange);
-          this.recvTransportConnected = null;
-        };
-
-        transport.on("connectionstatechange", onStateChange);
-
-        if (transport.connectionState === "connected") {
-          cleanup();
-          resolve();
-        }
-      });
-    }
-
-    return this.recvTransportConnected;
   }
 
   private async acquireLocalMedia(): Promise<void> {
@@ -1443,7 +1395,8 @@ export class MeetingClient {
       throw new Error(`Failed to fetch ICE servers (${iceResponse.status})`);
     }
 
-    void ((await iceResponse.json()) as IceServersResponse);
+    const icePayload = (await iceResponse.json()) as IceServersResponse;
+    this.iceServers = icePayload.iceServers as RTCIceServer[];
 
     this.emitConnectionState("connecting", "Connecting media to video server…");
     try {
@@ -1723,7 +1676,6 @@ export class MeetingClient {
     });
 
     await this.createRecvTransport();
-    await this.waitForRecvTransportConnected();
 
     this.mediaSessionReady = true;
 
@@ -2023,6 +1975,7 @@ export class MeetingClient {
       iceParameters: created.iceParameters as never,
       iceCandidates: created.iceCandidates as never,
       dtlsParameters: created.dtlsParameters as never,
+      iceServers: this.iceServers,
     });
 
     this.watchTransportState("send", this.sendTransport);
@@ -2092,6 +2045,12 @@ export class MeetingClient {
       iceParameters: created.iceParameters as never,
       iceCandidates: created.iceCandidates as never,
       dtlsParameters: created.dtlsParameters as never,
+      iceServers: this.iceServers,
+    });
+
+    this.log("recv transport created", {
+      transportId: created.transportId,
+      iceCandidates: created.iceCandidates,
     });
 
     this.watchTransportState("recv", this.recvTransport);
