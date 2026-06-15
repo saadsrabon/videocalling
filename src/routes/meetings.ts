@@ -4,28 +4,8 @@ import type { FastifyPluginAsync } from "fastify";
 import fp from "fastify-plugin";
 import { config } from "../config/env.js";
 import { requireAuth } from "../plugins/auth.plugin.js";
-import { notifyHostOfWaitingRequest } from "../signaling/handlers/lobby.js";
-import { RoomError, type JoinStatus } from "../rooms/types.js";
-import type { RoomService } from "../rooms/room-service.js";
-import type { ConnectionRegistry } from "../signaling/connection-registry.js";
+import { RoomError } from "../rooms/types.js";
 import { terminateMeetingSession } from "../rooms/meeting-terminate.js";
-
-function notifyHostIfWaiting(
-  app: { roomService: RoomService; signalingRegistry: ConnectionRegistry },
-  roomId: string,
-  userId: string,
-  status: JoinStatus,
-): void {
-  if (status !== "waiting") {
-    return;
-  }
-
-  notifyHostOfWaitingRequest(
-    { roomService: app.roomService, registry: app.signalingRegistry },
-    roomId,
-    userId,
-  );
-}
 
 const guestTokenAttempts = new Map<string, { count: number; resetAt: number }>();
 const GUEST_RATE_LIMIT = 20;
@@ -226,12 +206,6 @@ const plugin: FastifyPluginAsync = async (app) => {
           body.ghost ? displayName ?? "Observer" : displayName,
           { ghost: body.ghost === true },
         );
-        notifyHostIfWaiting(
-          app,
-          result.roomId,
-          request.user.userId,
-          result.status,
-        );
         return enrichJoinResponse(result);
       } catch (error) {
         if (error instanceof RoomError) {
@@ -399,12 +373,6 @@ const plugin: FastifyPluginAsync = async (app) => {
         code,
         authResult.user.userId,
         displayName,
-      );
-      notifyHostIfWaiting(
-        app,
-        result.roomId,
-        authResult.user.userId,
-        result.status,
       );
       return enrichJoinResponse(result);
     } catch (error) {

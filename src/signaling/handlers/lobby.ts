@@ -88,20 +88,22 @@ export async function handleLobbyAdmit(
       }),
     );
 
-    const otherParticipants = ctx.roomService
-      .listParticipantIds(roomId)
-      .filter((id) => id !== targetUserId && id !== ctx.user.userId);
+    if (!ctx.useLiveKit) {
+      const otherParticipants = ctx.roomService
+        .listParticipantIds(roomId)
+        .filter((id) => id !== targetUserId && id !== ctx.user.userId);
 
-    for (const participantId of otherParticipants) {
-      ctx.registry.sendToUser(
-        participantId,
-        JSON.stringify({
-          type: "peer-joined",
-          userId: targetUserId,
-          displayName: result.participant.displayName,
-          v: SIGNALING_VERSION,
-        }),
-      );
+      for (const participantId of otherParticipants) {
+        ctx.registry.sendToUser(
+          participantId,
+          JSON.stringify({
+            type: "peer-joined",
+            userId: targetUserId,
+            displayName: result.participant.displayName,
+            v: SIGNALING_VERSION,
+          }),
+        );
+      }
     }
   } catch (error) {
     if (error instanceof RoomError) {

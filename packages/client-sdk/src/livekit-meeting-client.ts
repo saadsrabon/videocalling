@@ -40,6 +40,18 @@ type ServerMessage =
     }
   | { type: "lobby.list"; roomId: string; waiting: ParticipantInfo[] }
   | {
+      type: "joined";
+      roomId: string;
+      participants: string[];
+      roster: ParticipantInfo[];
+      hostUserId?: string | null;
+    }
+  | {
+      type: "peer-joined";
+      userId: string;
+      displayName?: string;
+    }
+  | {
       type: "meeting.chat";
       roomId: string;
       id: string;
@@ -85,6 +97,8 @@ export class LiveKitMeetingClient {
   private signalingIdentityReady: Promise<void> | null = null;
   private lobbyAdmittedResolve: (() => void) | null = null;
   private lobbyAdmittedReject: ((error: Error) => void) | null = null;
+  private lobbyAdmittedPending = false;
+  private readonly seenRemotePeerIds = new Set<string>();
   private closed = false;
   private readonly remoteAudioElements = new Map<string, HTMLAudioElement>();
 
@@ -303,18 +317,21 @@ export class LiveKitMeetingClient {
     this.joinStatus = joinResponse.status;
     for (const participant of joinResponse.participants) {
       this.roster.set(participant.userId, participant.displayName);
+      if (participant.userId !== this._userId) {
+        this.seenRemotePeerIds.add(participant.userId);
+      }
     }
+
+    const lobbyAdmittedPromise =
+      joinResponse.status === "waiting"
+        ? this.waitForLobbyAdmitted()
+        : null;
 
     await this.connectSignaling();
     await this.waitForSignalingIdentity();
 
-    if (joinResponse.status === "waiting") {
-      this.emit({
-        type: "lobby-waiting",
-        roomId: joinResponse.roomId,
-        hostUserId: joinResponse.hostUserId,
-      });
-      await this.waitForLobbyAdmitted();
+    if (lobbyAdmittedPromise) {
+      await lobbyAdmittedPromise;
       await this.connectLiveKit(this.displayName);
       const roster = this.getParticipantRoster();
       this.emit({
@@ -343,6 +360,8 @@ export class LiveKitMeetingClient {
 
   async leave(): Promise<void> {
     this.closed = true;
+    this.lobbyAdmittedPending = false;
+    this.seenRemotePeerIds.clear();
     this.lobbyAdmittedReject?.(new Error("Left the meeting"));
     this.lobbyAdmittedResolve = null;
     this.lobbyAdmittedReject = null;
@@ -397,6 +416,11 @@ export class LiveKitMeetingClient {
   }
 
   private waitForLobbyAdmitted(timeoutMs = 300_000): Promise<void> {
+    if (this.lobbyAdmittedPending) {
+      this.lobbyAdmittedPending = false;
+      return Promise.resolve();
+    }
+
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
         if (!this.lobbyAdmittedReject) {
@@ -404,8 +428,8 @@ export class LiveKitMeetingClient {
         }
 
         this.lobbyAdmittedResolve = null;
+        this.lobbyAdmittedReject(new Error("Timed out waiting for the host to admit you"));
         this.lobbyAdmittedReject = null;
-        reject(new Error("Timed out waiting for the host to admit you"));
       }, timeoutMs);
 
       this.lobbyAdmittedResolve = () => {
@@ -419,19 +443,77 @@ export class LiveKitMeetingClient {
     });
   }
 
+  private resolveLobbyAdmission(): void {
+    if (this.lobbyAdmittedResolve) {
+      this.lobbyAdmittedResolve();
+      this.lobbyAdmittedResolve = null;
+      this.lobbyAdmittedReject = null;
+      return;
+    }
+
+    this.lobbyAdmittedPending = true;
+  }
+
+  private rejectLobbyAdmission(error: Error): void {
+    if (this.lobbyAdmittedReject) {
+      this.lobbyAdmittedReject(error);
+      this.lobbyAdmittedResolve = null;
+      this.lobbyAdmittedReject = null;
+      return;
+    }
+
+    this.lobbyAdmittedPending = false;
+  }
+
+  private applySignalingRoster(roster: ParticipantInfo[]): void {
+    for (const participant of roster) {
+      this.roster.set(participant.userId, participant.displayName);
+      if (participant.userId !== this._userId) {
+        this.seenRemotePeerIds.add(participant.userId);
+      }
+    }
+  }
+
+  private handleSignalingJoined(
+    message: Extract<ServerMessage, { type: "joined" }>,
+  ): void {
+    this.roomId = message.roomId;
+    this.joinStatus = "admitted";
+    if (message.hostUserId !== undefined) {
+      this.hostUserId = message.hostUserId;
+    }
+    this.applySignalingRoster(message.roster);
+    this.resolveLobbyAdmission();
+  }
+
   private emitJoinedFromLobby(message: Extract<
     ServerMessage,
     { type: "lobby.admitted" }
   >): void {
-    for (const participant of message.roster) {
-      this.roster.set(participant.userId, participant.displayName);
-    }
+    this.applySignalingRoster(message.roster);
 
     this.emit({
       type: "lobby-admitted",
       roomId: message.roomId,
       roster: message.roster,
       hostUserId: message.hostUserId ?? this.hostUserId,
+    });
+  }
+
+  private emitPeerJoined(userId: string, displayName?: string): void {
+    if (userId === this._userId || this.seenRemotePeerIds.has(userId)) {
+      return;
+    }
+
+    this.seenRemotePeerIds.add(userId);
+    if (displayName) {
+      this.roster.set(userId, displayName);
+    }
+
+    this.emit({
+      type: "peer-joined",
+      userId,
+      displayName,
     });
   }
 
@@ -615,9 +697,7 @@ export class LiveKitMeetingClient {
           this.hostUserId = message.hostUserId;
         }
         this.emitJoinedFromLobby(message);
-        this.lobbyAdmittedResolve?.();
-        this.lobbyAdmittedResolve = null;
-        this.lobbyAdmittedReject = null;
+        this.resolveLobbyAdmission();
         break;
       case "lobby.denied":
         this.emit({
@@ -625,11 +705,9 @@ export class LiveKitMeetingClient {
           roomId: message.roomId,
           message: message.message,
         });
-        this.lobbyAdmittedReject?.(
+        this.rejectLobbyAdmission(
           new Error(message.message ?? "The host declined your request to join"),
         );
-        this.lobbyAdmittedResolve = null;
-        this.lobbyAdmittedReject = null;
         break;
       case "lobby.request":
         this.emit({
@@ -641,6 +719,12 @@ export class LiveKitMeetingClient {
         break;
       case "lobby.list":
         this.emit({ type: "lobby-waiting-list", waiting: message.waiting });
+        break;
+      case "joined":
+        this.handleSignalingJoined(message);
+        break;
+      case "peer-joined":
+        this.emitPeerJoined(message.userId, message.displayName);
         break;
       case "meeting.chat": {
         const chat: MeetingChatMessage = {
@@ -744,17 +828,11 @@ export class LiveKitMeetingClient {
     });
 
     room.on(RoomEvent.ParticipantConnected, (participant) => {
-      if (participant.name) {
-        this.roster.set(participant.identity, participant.name);
-      }
-      this.emit({
-        type: "peer-joined",
-        userId: participant.identity,
-        displayName: participant.name,
-      });
+      this.emitPeerJoined(participant.identity, participant.name);
     });
 
     room.on(RoomEvent.ParticipantDisconnected, (participant) => {
+      this.seenRemotePeerIds.delete(participant.identity);
       this.emit({ type: "peer-left", userId: participant.identity });
     });
 
