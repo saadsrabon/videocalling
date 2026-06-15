@@ -1,0 +1,63 @@
+---
+description: Simfree group meetings — 10+ users, backend vs SDK vs admin app
+alwaysApply: true
+---
+
+# Simfree meeting architecture (Cursor context)
+
+## Scale target
+
+- Group meetings (SFU) are built for **at least 10 participants** today.
+- We will **gradually increase** capacity (config, mediasoup/VPS tuning, load tests) — do not hard-code “6 users” in new code or docs unless quoting legacy text.
+- Current default: `SFU_MAX_PEERS=10` in `src/config/env.ts`, `.env.example`, and `deploy/setup-server.sh`.
+- When changing limits, update **backend config**, **API responses** (`maxParticipants`), **docs**, and any admin copy that mentions participant caps.
+
+## Two repos — one product
+
+| Layer | Repo / path | Role |
+|-------|-------------|------|
+| **Backend** | `D:\videocalling` (this repo) | Fastify API, rooms, signaling WS, mediasoup SFU |
+| **Browser SDK (source of truth)** | `D:\videocalling\packages\client-sdk\src\` | `MeetingClient`, types, staff call client |
+| **SDK copy (consumer)** | `D:\simfree-monorepo\packages\video-client\src\` | Published in monorepo as `@simfree/video-client` |
+| **Admin UI** | `D:\simfree-monorepo\apps\admin\` | Meetings page, `/meet/[code]`, `MeetingRoom.tsx` |
+
+The admin app **does not** embed videocalling server code. It calls the video API over HTTP/WebSocket and imports **`@simfree/video-client`**.
+
+## SDK workflow (required)
+
+1. Implement or fix meeting behavior in **`packages/client-sdk/`** (this repo).
+2. Sync to Simfree:
+   ```bash
+   npm run sync:simfree
+   # or: SIMFREE_ROOT=D:/simfree-monorepo bash scripts/sync-sdk-to-simfree.sh
+   ```
+3. Rebuild consumer package and admin:
+   ```bash
+   cd D:/simfree-monorepo
+   pnpm --filter @simfree/video-client build
+   pnpm --filter admin build
+   ```
+4. Do **not** edit `simfree-monorepo/packages/video-client/src/` as the primary copy — changes will be overwritten on the next sync.
+
+Admin-only UI (layouts, toasts, sounds, forms) lives under `apps/admin/` and does not need to live in the SDK unless it is reusable client logic.
+
+## Backend touchpoints for meetings
+
+- HTTP: `src/routes/meetings.ts` → `src/rooms/room-service.ts`
+- Signaling: `src/signaling/` (join, lobby, SFU handlers)
+- SFU: `src/sfu/` (mediasoup; one upstream per peer, N downstream)
+- Expiry / limits: `src/rooms/meeting-expiry.ts`, `expiresAt`, `durationMinutes`
+
+## Deploy split (production)
+
+- **Video API + SFU:** separate VPS (e.g. proxied as `https://admin.simfree.io/video-api`)
+- **Admin + Simfree API:** app server; admin uses `NEXT_PUBLIC_VIDEO_API_URL` / proxy — not localhost videocalling unless dev
+
+When adding meeting features, consider **both** repos and whether docs (`docs/frontend-integration.md`) need updating.
+
+## Production video server (split deploy)
+
+- Admin/nginx proxies `https://admin.simfree.io/video-api` → video VPS (e.g. `147.79.71.98:3004`).
+- **Signaling** (HTTPS/WSS) goes through nginx; **SFU media** (UDP/TCP **40000–40100**) goes **direct** to the video server public IP.
+- On the **video VPS** `.env`, `MEDIASOUP_ANNOUNCED_IP` must be that server's **public IP** (not the app server IP). Wrong IP = camera works locally but other participants never receive A/V.
+- Open AWS/security-group ports on the **video** server: `40000–40100` UDP+TCP, plus TURN `3478` if used.

@@ -160,6 +160,7 @@ export type MeetingClientEvent =
       hasAudio: boolean;
       message: string;
     }
+  | { type: "local-stream-ready"; stream: MediaStream }
   | {
       type: "joined";
       roomId: string;

@@ -991,6 +991,7 @@ export class MeetingClient {
     );
 
     this.localStream = result.stream;
+    this.emit({ type: "local-stream-ready", stream: result.stream });
 
     if (!result.hasVideo) {
       this.cameraOff = true;
