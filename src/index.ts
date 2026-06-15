@@ -57,8 +57,8 @@ async function start() {
     await app.register(iceServerRoutes);
     await app.register(meRoutes);
     await app.register(roomRoutes);
-    await app.register(meetingRoutes);
     await app.register(signalingPlugin);
+    await app.register(meetingRoutes);
     await app.listen({ port: config.port, host: config.host });
   } catch (error) {
     app.log.error(error);

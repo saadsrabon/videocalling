@@ -14,7 +14,7 @@ cd "$ROOT"
 echo "==> Writing .env for video server ${PUBLIC_IP}"
 cat > "$ROOT/.env" <<EOF
 PORT=3004
-HOST=127.0.0.1
+HOST=0.0.0.0
 NODE_ENV=production
 AUTH_MODE=jwt
 JWT_SECRET=${JWT_SECRET}
@@ -29,6 +29,14 @@ SFU_MAX_PEERS=10
 MEETING_BASE_URL=https://admin.simfree.io/meet
 GUEST_JWT_TTL_SECONDS=3600
 EOF
+
+echo "==> Allow app server nginx to reach API port 3004 (adjust APP_SERVER_IP if needed)"
+APP_SERVER_IP="${APP_SERVER_IP:-3.73.242.203}"
+if command -v ufw >/dev/null 2>&1; then
+  ufw allow from "${APP_SERVER_IP}" to any port 3004 proto tcp comment 'simfree admin proxy' || true
+  ufw allow "${MEDIASOUP_PORT}:40100/udp" || true
+  ufw allow "${MEDIASOUP_PORT}:40100/tcp" || true
+fi
 
 echo "==> Pull, build, restart"
 git pull --ff-only origin main

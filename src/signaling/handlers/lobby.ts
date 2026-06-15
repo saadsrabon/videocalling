@@ -6,8 +6,8 @@ import {
   sendMessage,
 } from "../message-types.js";
 
-function notifyHostOfWaitingRequest(
-  ctx: SignalingContext,
+export function notifyHostOfWaitingRequest(
+  ctx: Pick<SignalingContext, "roomService" | "registry">,
   roomId: string,
   userId: string,
 ): void {

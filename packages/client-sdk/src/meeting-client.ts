@@ -358,6 +358,7 @@ export class MeetingClient {
   private expiresAtMs: number | null = null;
   private meetingExpiryTimer: ReturnType<typeof setTimeout> | null = null;
   private meetingWarningTimers: ReturnType<typeof setTimeout>[] = [];
+  private lobbyPollTimer: ReturnType<typeof setInterval> | null = null;
 
   private constructor(options: MeetingClientJoinOptions) {
     this.serverUrl = normalizeServerUrl(options.serverUrl);
@@ -597,7 +598,7 @@ export class MeetingClient {
 
   listWaitingParticipants(): void {
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
-      throw new Error("Signaling socket is not open");
+      return;
     }
 
     this.ws.send(
@@ -606,6 +607,29 @@ export class MeetingClient {
         roomId: this.roomId,
       }),
     );
+  }
+
+  private startLobbyPolling(): void {
+    if (!this.isHost || this.lobbyPollTimer) {
+      return;
+    }
+
+    this.listWaitingParticipants();
+    this.lobbyPollTimer = setInterval(() => {
+      if (this.closed || !this.isHost) {
+        this.stopLobbyPolling();
+        return;
+      }
+
+      this.listWaitingParticipants();
+    }, 5000);
+  }
+
+  private stopLobbyPolling(): void {
+    if (this.lobbyPollTimer) {
+      clearInterval(this.lobbyPollTimer);
+      this.lobbyPollTimer = null;
+    }
   }
 
   sendChat(text: string): void {
@@ -676,6 +700,7 @@ export class MeetingClient {
     this.intentionalLeave = true;
     this.closed = true;
     this.clearMeetingExpiryWatch();
+    this.stopLobbyPolling();
 
     for (const meta of this.remoteTracks.values()) {
       meta.consumer.close();
@@ -793,6 +818,9 @@ export class MeetingClient {
           message.participants,
           message.roster ?? this.getParticipantRoster(),
         );
+        if (this.isHost) {
+          this.startLobbyPolling();
+        }
         break;
       case "lobby.waiting":
         this.joinStatus = "waiting";
@@ -945,7 +973,7 @@ export class MeetingClient {
     });
   }
 
-  private waitForRecvTransportConnected(timeoutMs = 15000): Promise<void> {
+  private waitForRecvTransportConnected(timeoutMs = 25000): Promise<void> {
     if (!this.recvTransport) {
       return Promise.resolve();
     }
@@ -1147,6 +1175,10 @@ export class MeetingClient {
       await this.waitForJoined();
     }
 
+    if (this.isHost) {
+      this.startLobbyPolling();
+    }
+
     this.log(this.ghostMode ? "ghost observer joining (no publish)" : "acquiring camera/mic after admission");
 
     if (!this.ghostMode) {
@@ -1161,12 +1193,31 @@ export class MeetingClient {
     void ((await iceResponse.json()) as IceServersResponse);
 
     this.emitConnectionState("connecting", "Connecting media to video server…");
-    await this.withTimeout(
-      this.startMediasoupSession(),
-      45_000,
-      "Media session timed out — check video server MEDIASOUP_ANNOUNCED_IP (must be 147.79.71.98) and open UDP/TCP ports 40000–40100 on that server.",
-    );
-    this.emitConnectionState("connected");
+    try {
+      await this.withTimeout(
+        this.startMediasoupSession(),
+        45_000,
+        "Media session timed out — check video server MEDIASOUP_ANNOUNCED_IP (must be 147.79.71.98) and open UDP/TCP ports 40000–40100 on that server.",
+      );
+      this.emitConnectionState("connected");
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : "Media session failed";
+      this.log("mediasoup session failed — signaling and lobby remain active", {
+        error: message,
+      });
+      this.emit({ type: "error", message });
+      this.emit({
+        type: "transport-state",
+        direction: "recv",
+        state: "failed",
+        message,
+      });
+      this.emitConnectionState(
+        "connected",
+        "Connected — video server media unreachable. Open UDP/TCP 40000–40100 on 147.79.71.98.",
+      );
+    }
   }
 
   private withTimeout<T>(
