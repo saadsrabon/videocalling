@@ -165,6 +165,17 @@ function describeTrack(track: MediaStreamTrack): Record<string, unknown> {
 const MEDIA_PORT_HINT =
   "Open UDP/TCP ports 40000–40100 on the video server (AWS security group) for SFU media.";
 
+function resolveTrackSource(
+  _kind: "audio" | "video",
+  appDataSource?: string,
+): MediaSource {
+  if (appDataSource === "screen") {
+    return "screen";
+  }
+
+  return "camera";
+}
+
 async function getUserMediaOnce(
   constraints: MediaStreamConstraints,
   timeoutMs = 12000,
@@ -233,7 +244,8 @@ async function getUserMediaWithRetry(
 
     try {
       log("requesting getUserMedia", { attempt: attempt + 1, constraints });
-      const stream = await getUserMediaOnce(constraints);
+      const timeoutMs = constraints.video ? (attempt === 0 ? 20_000 : 12_000) : 8000;
+      const stream = await getUserMediaOnce(constraints, timeoutMs);
       const hasVideo = stream.getVideoTracks().length > 0;
       const hasAudio = stream.getAudioTracks().length > 0;
 
@@ -377,7 +389,9 @@ export class MeetingClient {
 
   private readonly remoteTracks = new Map<string, RemoteTrackMeta>();
   private readonly producerIndex = new Map<string, string>();
+  private readonly remoteAudioProducerByPeer = new Map<string, string>();
   private readonly pendingConsumes: PendingConsume[] = [];
+  private deferredCameraTimer: ReturnType<typeof setTimeout> | null = null;
   private joinOptions: MeetingClientJoinOptions | null = null;
   private intentionalLeave = false;
   private reconnectAttempts = 0;
@@ -749,6 +763,7 @@ export class MeetingClient {
     this.clearMeetingExpiryWatch();
     this.stopLobbyPolling();
     this.stopQualityMonitor();
+    this.clearDeferredCameraRetry();
 
     for (const meta of this.remoteTracks.values()) {
       meta.consumer.close();
@@ -972,7 +987,7 @@ export class MeetingClient {
           message.peerId,
           message.producerId,
           message.kind,
-          message.appData?.source === "screen" ? "screen" : "camera",
+          resolveTrackSource(message.kind, message.appData?.source),
         ).catch((error) => {
           const errMsg =
             error instanceof Error ? error.message : "Consume failed";
@@ -1015,6 +1030,13 @@ export class MeetingClient {
     meta.stream.getTracks().forEach((track) => track.stop());
     this.remoteTracks.delete(producerId);
     this.producerIndex.delete(producerId);
+
+    if (meta.kind === "audio") {
+      const mapped = this.remoteAudioProducerByPeer.get(meta.peerId);
+      if (mapped === producerId) {
+        this.remoteAudioProducerByPeer.delete(meta.peerId);
+      }
+    }
 
     this.emit({
       type: "track-removed",
@@ -1152,7 +1174,7 @@ export class MeetingClient {
         const videoTrack =
           this.customVideoTrack ?? this.localStream?.getVideoTracks()[0];
         if (videoTrack) {
-          this.cameraProducer?.close();
+          await this.closeLocalProducer(this.cameraProducer);
           this.cameraProducer = await this.sendTransport.produce({
             track: videoTrack,
             appData: { source: "camera" },
@@ -1162,7 +1184,7 @@ export class MeetingClient {
       } else if (kind === "audio" && this.sendTransport && !this.micMuted) {
         const audioTrack = this.localStream?.getAudioTracks()[0];
         if (audioTrack) {
-          this.micProducer?.close();
+          await this.closeLocalProducer(this.micProducer);
           this.micProducer = await this.sendTransport.produce({
             track: audioTrack,
             appData: { source: "mic" },
@@ -1626,6 +1648,7 @@ export class MeetingClient {
 
   private teardownMediaSession(): void {
     this.stopQualityMonitor();
+    this.clearDeferredCameraRetry();
     this.mediaSessionReady = false;
 
     for (const meta of this.remoteTracks.values()) {
@@ -1633,11 +1656,12 @@ export class MeetingClient {
     }
     this.remoteTracks.clear();
     this.producerIndex.clear();
+    this.remoteAudioProducerByPeer.clear();
     this.pendingConsumes.length = 0;
 
-    this.micProducer?.close();
-    this.cameraProducer?.close();
-    this.screenProducer?.close();
+    void this.closeLocalProducer(this.micProducer);
+    void this.closeLocalProducer(this.cameraProducer);
+    void this.closeLocalProducer(this.screenProducer);
     this.micProducer = null;
     this.cameraProducer = null;
     this.screenProducer = null;
@@ -1729,6 +1753,108 @@ export class MeetingClient {
     this.emit({ type: "media-ready" });
     this.startQualityMonitor();
     this.scheduleDelayedResync();
+
+    if (!this.ghostMode && !this.cameraProducer && this.localStream) {
+      this.scheduleDeferredCameraRetry();
+    }
+  }
+
+  private clearDeferredCameraRetry(): void {
+    if (this.deferredCameraTimer) {
+      clearTimeout(this.deferredCameraTimer);
+      this.deferredCameraTimer = null;
+    }
+  }
+
+  private scheduleDeferredCameraRetry(): void {
+    this.clearDeferredCameraRetry();
+
+    if (this.ghostMode || this.closed || this.cameraProducer) {
+      return;
+    }
+
+    this.deferredCameraTimer = window.setTimeout(() => {
+      void this.tryAcquireCameraInBackground();
+    }, 3000);
+  }
+
+  private async tryAcquireCameraInBackground(): Promise<void> {
+    if (
+      this.closed ||
+      this.ghostMode ||
+      !this.sendTransport ||
+      this.cameraProducer ||
+      this.customVideoTrack
+    ) {
+      return;
+    }
+
+    if (this.localStream?.getVideoTracks().some((track) => track.readyState === "live")) {
+      return;
+    }
+
+    try {
+      this.log("retrying camera acquisition in background");
+      const stream = await getUserMediaOnce(
+        { audio: false, video: { width: { ideal: 640 }, height: { ideal: 480 } } },
+        15_000,
+      );
+      const videoTrack = stream.getVideoTracks()[0];
+
+      if (!videoTrack || !this.sendTransport) {
+        return;
+      }
+
+      if (!this.localStream) {
+        this.localStream = new MediaStream();
+      }
+
+      for (const existing of this.localStream.getVideoTracks()) {
+        existing.stop();
+        this.localStream.removeTrack(existing);
+      }
+
+      this.localStream.addTrack(videoTrack);
+      this.attachLocalTrackListeners(this.localStream);
+      this.emit({ type: "local-stream-ready", stream: this.localStream });
+
+      await this.closeLocalProducer(this.cameraProducer);
+      this.cameraProducer = await this.sendTransport.produce({
+        track: videoTrack,
+        appData: { source: "camera" },
+      });
+      this.cameraOff = false;
+      this.watchTrack(videoTrack, "camera-producer");
+      this.log("background camera acquired", { producerId: this.cameraProducer.id });
+    } catch (error) {
+      this.log("background camera retry failed", {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
+  private async closeLocalProducer(producer: Producer | null): Promise<void> {
+    if (!producer || producer.closed) {
+      return;
+    }
+
+    const producerId = producer.id;
+
+    try {
+      if (this.ws?.readyState === WebSocket.OPEN && this.roomId) {
+        await this.request("sfu.closeProducer", {
+          roomId: this.roomId,
+          producerId,
+        });
+      }
+    } catch (error) {
+      this.log("close producer request failed", {
+        producerId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+
+    producer.close();
   }
 
   private scheduleDelayedResync(): void {
@@ -1800,11 +1926,26 @@ export class MeetingClient {
       roomId: this.roomId,
     })) as Extract<ServerMessage, { type: "sfu.producerList" }>;
 
-    return response.producers.map((producer) => ({
+    const latestByKey = new Map<
+      string,
+      {
+        peerId: string;
+        producerId: string;
+        kind: "audio" | "video";
+        source?: string;
+      }
+    >();
+
+    for (const producer of response.producers) {
+      const sourceKey = producer.source ?? (producer.kind === "audio" ? "mic" : "camera");
+      latestByKey.set(`${producer.peerId}:${producer.kind}:${sourceKey}`, producer);
+    }
+
+    return [...latestByKey.values()].map((producer) => ({
       peerId: producer.peerId,
       producerId: producer.producerId,
       kind: producer.kind,
-      source: producer.source === "screen" ? "screen" : "camera",
+      source: resolveTrackSource(producer.kind, producer.source),
     }));
   }
 
@@ -1979,6 +2120,7 @@ export class MeetingClient {
     const videoTrack = this.customVideoTrack ?? this.localStream.getVideoTracks()[0];
 
     if (audioTrack && this.sendTransport) {
+      await this.closeLocalProducer(this.micProducer);
       this.micProducer = await this.sendTransport.produce({
         track: audioTrack,
         appData: { source: "mic" },
@@ -1995,6 +2137,7 @@ export class MeetingClient {
     }
 
     if (videoTrack && this.sendTransport) {
+      await this.closeLocalProducer(this.cameraProducer);
       this.cameraProducer = await this.sendTransport.produce({
         track: videoTrack,
         appData: { source: "camera" },
@@ -2035,6 +2178,18 @@ export class MeetingClient {
       return;
     }
 
+    if (kind === "audio") {
+      const staleProducerId = this.remoteAudioProducerByPeer.get(peerId);
+      if (staleProducerId && staleProducerId !== producerId) {
+        this.log("replacing stale remote audio producer", {
+          peerId,
+          staleProducerId,
+          producerId,
+        });
+        this.removeProducerTrack(staleProducerId);
+      }
+    }
+
     const consumed = (await this.request("sfu.consume", {
       roomId: this.roomId,
       producerId,
@@ -2059,7 +2214,9 @@ export class MeetingClient {
 
     const stream = new MediaStream([consumer.track]);
     const resolvedSource =
-      consumed.appData?.source === "screen" ? "screen" : source;
+      consumed.appData?.source === "screen"
+        ? "screen"
+        : resolveTrackSource(kind, consumed.appData?.source);
 
     this.log("remote track ready", {
       peerId,
@@ -2071,6 +2228,9 @@ export class MeetingClient {
       paused: consumer.paused,
     });
     this.watchTrack(consumer.track, `${peerId}/${kind}`);
+    consumer.track.addEventListener("unmute", () => {
+      this.log("remote track unmuted (media flowing)", { peerId, producerId, kind });
+    });
 
     consumer.on("transportclose", () => {
       this.log("consumer transport closed", { producerId, peerId, kind });
@@ -2089,6 +2249,10 @@ export class MeetingClient {
       stream,
     });
     this.producerIndex.set(producerId, peerId);
+
+    if (kind === "audio") {
+      this.remoteAudioProducerByPeer.set(peerId, producerId);
+    }
 
     this.emit({
       type: "track-added",

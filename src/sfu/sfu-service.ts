@@ -273,6 +273,26 @@ export class SfuService {
       );
     }
 
+    const nextSource = appData?.source;
+    for (const [existingId, existing] of peer.producers) {
+      if (existing.kind !== kind) {
+        continue;
+      }
+
+      const existingSource = (existing.appData as { source?: string }).source;
+
+      if (existingSource === nextSource || kind === "audio") {
+        existing.close();
+        peer.producers.delete(existingId);
+        this.emit({
+          type: "producerClosed",
+          roomId,
+          peerId: userId,
+          producerId: existingId,
+        });
+      }
+    }
+
     const producer = await transport.produce({
       kind,
       rtpParameters,
