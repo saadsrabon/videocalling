@@ -2,6 +2,7 @@ export { VideoClient } from "./video-client.js";
 export { StaffCallClient } from "./staff-call-client.js";
 export { MeetingClient } from "./meeting-client.js";
 export { LiveKitMeetingClient } from "./livekit-meeting-client.js";
+export { LiveKitStaffCallClient } from "./livekit-staff-call-client.js";
 export type {
   CallInvitePayload,
   GuestTokenResponse,

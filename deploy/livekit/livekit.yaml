@@ -21,5 +21,6 @@ keys:
   devkey: devsecret-change-me-in-production-min-32-chars!!
 
 turn:
-  enabled: true
-  udp_port: 3478
+  enabled: false
+  # coturn on this VPS already uses 3478 — enable only after stopping coturn
+  # udp_port: 3478

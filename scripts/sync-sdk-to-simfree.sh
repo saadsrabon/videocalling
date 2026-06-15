@@ -19,6 +19,8 @@ SDK_FILES=(
   video-client.ts
   staff-call-client.ts
   meeting-client.ts
+  livekit-meeting-client.ts
+  livekit-staff-call-client.ts
 )
 
 if [[ ! -d "$SRC" ]]; then

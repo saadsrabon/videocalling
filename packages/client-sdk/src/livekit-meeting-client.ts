@@ -4,15 +4,19 @@ import {
   RoomEvent,
   Track,
   createLocalTracks,
+  type RemoteTrack,
+  type LocalTrack,
 } from "livekit-client";
 import type {
   GuestTokenResponse,
+  MediaSource,
   MeetingChatMessage,
   MeetingClientEvent,
   MeetingClientEventHandler,
   MeetingClientJoinOptions,
   MeetingCreateResponse,
   MeetingJoinResponse,
+  MeetingJoinStatus,
   ParticipantInfo,
 } from "./types.js";
 import { authHeaders, normalizeServerUrl, normalizeToken } from "./http.js";
@@ -55,17 +59,20 @@ export class LiveKitMeetingClient {
   private readonly serverUrl: string;
   private readonly getToken: () => Promise<string> | string;
   private token = "";
+  private _userId = "";
   private roomId = "";
   private code = "";
   private hostUserId: string | null = null;
-  private joinStatus: "admitted" | "waiting" = "admitted";
+  private joinStatus: MeetingJoinStatus = "admitted";
+  private ghostMode = false;
   private ws: WebSocket | null = null;
   private lkRoom: Room | null = null;
   private localStream: MediaStream | null = null;
   private readonly handlers = new Set<MeetingClientEventHandler>();
   private readonly chatHistory: MeetingChatMessage[] = [];
-  private micEnabled = true;
-  private camEnabled = true;
+  private readonly roster = new Map<string, string>();
+  private micMuted = false;
+  private cameraOff = false;
 
   private constructor(
     serverUrl: string,
@@ -82,9 +89,102 @@ export class LiveKitMeetingClient {
     return new LiveKitMeetingClient(options.serverUrl, options.getToken);
   }
 
-  on(handler: MeetingClientEventHandler): () => void {
+  static async join(
+    options: MeetingClientJoinOptions,
+    onEvent?: MeetingClientEventHandler,
+  ): Promise<LiveKitMeetingClient> {
+    const client = new LiveKitMeetingClient(
+      options.serverUrl,
+      () => options.token,
+    );
+    if (onEvent) {
+      client.on(onEvent);
+    }
+    await client.join(options);
+    return client;
+  }
+
+  get userId(): string {
+    return this._userId;
+  }
+
+  get isHost(): boolean {
+    return this.hostUserId === this._userId;
+  }
+
+  get currentJoinStatus(): MeetingJoinStatus {
+    return this.joinStatus;
+  }
+
+  get localMediaStream(): MediaStream | null {
+    return this.localStream;
+  }
+
+  getDisplayName(userId: string): string {
+    return this.roster.get(userId) ?? userId;
+  }
+
+  getParticipantRoster(): ParticipantInfo[] {
+    return [...this.roster.entries()].map(([userId, displayName]) => ({
+      userId,
+      displayName,
+    }));
+  }
+
+  on(handler: MeetingClientEventHandler): void {
     this.handlers.add(handler);
-    return () => this.handlers.delete(handler);
+    if (this.chatHistory.length > 0) {
+      handler({ type: "chat-history-replay", messages: [...this.chatHistory] });
+    }
+  }
+
+  off(handler: MeetingClientEventHandler): void {
+    this.handlers.delete(handler);
+  }
+
+  setMicMuted(muted: boolean): void {
+    this.micMuted = muted;
+    void this.lkRoom?.localParticipant.setMicrophoneEnabled(!muted);
+  }
+
+  isMicMuted(): boolean {
+    return this.micMuted;
+  }
+
+  setCameraOff(off: boolean): void {
+    this.cameraOff = off;
+    void this.lkRoom?.localParticipant.setCameraEnabled(!off);
+  }
+
+  isCameraOff(): boolean {
+    return this.cameraOff;
+  }
+
+  listWaitingParticipants(): void {
+    this.listWaiting();
+  }
+
+  async setVideoSource(track: MediaStreamTrack): Promise<void> {
+    if (!this.lkRoom) {
+      return;
+    }
+
+    const existing = this.lkRoom.localParticipant.getTrackPublication(
+      Track.Source.Camera,
+    )?.track;
+
+    if (existing) {
+      await this.lkRoom.localParticipant.unpublishTrack(existing);
+    }
+
+    await this.lkRoom.localParticipant.publishTrack(track);
+    if (this.localStream) {
+      const old = this.localStream.getVideoTracks()[0];
+      if (old) {
+        this.localStream.removeTrack(old);
+      }
+      this.localStream.addTrack(track);
+    }
   }
 
   private emit(event: MeetingClientEvent): void {
@@ -137,11 +237,15 @@ export class LiveKitMeetingClient {
   async join(options: MeetingClientJoinOptions): Promise<MeetingJoinResponse> {
     this.token = normalizeToken(options.token ?? (await this.getToken()));
     this.code = options.code;
+    this.ghostMode = options.ghostMode === true;
 
     const joinResponse = await this.httpJoin(options);
     this.roomId = joinResponse.roomId;
     this.hostUserId = joinResponse.hostUserId;
     this.joinStatus = joinResponse.status;
+    for (const participant of joinResponse.participants) {
+      this.roster.set(participant.userId, participant.displayName);
+    }
 
     await this.connectSignaling();
 
@@ -184,23 +288,31 @@ export class LiveKitMeetingClient {
   }
 
   async toggleMic(enabled?: boolean): Promise<boolean> {
-    this.micEnabled = enabled ?? !this.micEnabled;
-    await this.lkRoom?.localParticipant.setMicrophoneEnabled(this.micEnabled);
-    return this.micEnabled;
+    const next = enabled ?? this.micMuted;
+    this.setMicMuted(!next);
+    return !this.micMuted;
   }
 
   async toggleCam(enabled?: boolean): Promise<boolean> {
-    this.camEnabled = enabled ?? !this.camEnabled;
-    await this.lkRoom?.localParticipant.setCameraEnabled(this.camEnabled);
-    return this.camEnabled;
+    const next = enabled ?? this.cameraOff;
+    this.setCameraOff(!next);
+    return !this.cameraOff;
   }
 
   async startScreenShare(): Promise<void> {
-    await this.lkRoom?.localParticipant.setScreenShareEnabled(true);
+    if (!this.lkRoom) {
+      return;
+    }
+    await this.lkRoom.localParticipant.setScreenShareEnabled(true);
+    this.emit({ type: "screen-share-started" });
   }
 
   async stopScreenShare(): Promise<void> {
-    await this.lkRoom?.localParticipant.setScreenShareEnabled(false);
+    if (!this.lkRoom) {
+      return;
+    }
+    await this.lkRoom.localParticipant.setScreenShareEnabled(false);
+    this.emit({ type: "screen-share-stopped" });
   }
 
   sendChat(text: string): void {
@@ -323,6 +435,7 @@ export class LiveKitMeetingClient {
 
     switch (message.type) {
       case "connected":
+        this._userId = message.userId;
         this.emit({ type: "connected", userId: message.userId });
         this.wsSend({ type: "join", roomId: this.roomId, v: 1 });
         break;
@@ -426,6 +539,23 @@ export class LiveKitMeetingClient {
     const payload = (await response.json()) as LiveKitTokenPayload;
     const room = new Room({ adaptiveStream: true, dynacast: true });
 
+    const emitTrack = (
+      peerId: string,
+      track: RemoteTrack | LocalTrack,
+      source: MediaSource,
+    ): void => {
+      const kind = track.kind === Track.Kind.Audio ? "audio" : "video";
+      const stream = new MediaStream([track.mediaStreamTrack]);
+      this.emit({
+        type: "track-added",
+        peerId,
+        kind,
+        source,
+        track: track.mediaStreamTrack,
+        stream,
+      });
+    };
+
     room.on(RoomEvent.ConnectionStateChanged, (state: ConnectionState) => {
       const mapped =
         state === ConnectionState.Connected
@@ -439,6 +569,9 @@ export class LiveKitMeetingClient {
     });
 
     room.on(RoomEvent.ParticipantConnected, (participant) => {
+      if (participant.name) {
+        this.roster.set(participant.identity, participant.name);
+      }
       this.emit({
         type: "peer-joined",
         userId: participant.identity,
@@ -450,22 +583,63 @@ export class LiveKitMeetingClient {
       this.emit({ type: "peer-left", userId: participant.identity });
     });
 
-    room.on(RoomEvent.TrackSubscribed, () => {
+    room.on(RoomEvent.TrackSubscribed, (track, publication, participant) => {
+      const source: MediaSource =
+        publication.source === Track.Source.ScreenShare ? "screen" : "camera";
+      emitTrack(participant.identity, track, source);
       this.emit({ type: "media-ready" });
     });
 
+    room.on(RoomEvent.TrackUnsubscribed, (_track, publication, participant) => {
+      const source: MediaSource =
+        publication.source === Track.Source.ScreenShare ? "screen" : "camera";
+      this.emit({
+        type: "track-removed",
+        peerId: participant.identity,
+        producerId: publication.trackSid,
+        source,
+      });
+    });
+
+    room.on(RoomEvent.LocalTrackPublished, (publication) => {
+      const track = publication.track;
+      if (!track) {
+        return;
+      }
+      if (publication.source === Track.Source.ScreenShare) {
+        this.emit({ type: "screen-share-started" });
+        emitTrack(this._userId, track, "screen");
+      }
+    });
+
+    room.on(RoomEvent.LocalTrackUnpublished, (publication) => {
+      if (publication.source === Track.Source.ScreenShare) {
+        this.emit({ type: "screen-share-stopped" });
+        this.emit({
+          type: "track-removed",
+          peerId: this._userId,
+          producerId: publication.trackSid,
+          source: "screen",
+        });
+      }
+    });
+
+    this.emit({ type: "media-syncing" });
     this.emit({ type: "connection-state", state: "connecting" });
     await room.connect(payload.server_url, payload.participant_token);
     this.lkRoom = room;
 
-    const tracks = await createLocalTracks({ audio: true, video: true });
-    this.localStream = new MediaStream();
-    for (const track of tracks) {
-      this.localStream.addTrack(track.mediaStreamTrack);
-      await room.localParticipant.publishTrack(track);
+    if (!this.ghostMode) {
+      const tracks = await createLocalTracks({ audio: true, video: true });
+      this.localStream = new MediaStream();
+      for (const track of tracks) {
+        this.localStream.addTrack(track.mediaStreamTrack);
+        await room.localParticipant.publishTrack(track);
+        emitTrack(this._userId, track, "camera");
+      }
+      this.emit({ type: "local-stream-ready", stream: this.localStream });
     }
 
-    this.emit({ type: "local-stream-ready", stream: this.localStream });
     this.emit({ type: "media-ready" });
   }
 
