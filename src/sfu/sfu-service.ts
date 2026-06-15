@@ -242,6 +242,18 @@ export class SfuService {
     await transport.connect({ dtlsParameters });
   }
 
+  async restartIce(
+    roomId: string,
+    userId: string,
+    transportId: string,
+  ): Promise<{ iceParameters: WebRtcTransport["iceParameters"] }> {
+    const room = this.getRoom(roomId);
+    const peer = this.getPeer(room, userId);
+    const transport = this.getTransport(peer, transportId);
+    const iceParameters = await transport.restartIce();
+    return { iceParameters };
+  }
+
   async produce(
     roomId: string,
     userId: string,

@@ -7,6 +7,8 @@ export type {
   IceServerConfig,
   IceServersResponse,
   MediaSource,
+  ConnectionQualityLevel,
+  MeetingChatMessage,
   MeetingClientEvent,
   MeetingClientEventHandler,
   MeetingClientJoinOptions,

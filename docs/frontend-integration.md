@@ -2,7 +2,7 @@
 
 > How to connect **any frontend** (React, Vue, Angular, plain HTML, mobile WebView) to the Video SDK backend.
 >
-> **Last updated:** 2026-06-10 · **API version:** `v1` · **Signaling version:** `1`
+> **Last updated:** 2026-06-15 · **API version:** `v1` · **Signaling version:** `1`
 
 ---
 
@@ -29,6 +29,9 @@ Use this table to jump to a section. **When you add a backend or SDK feature, ad
 | Meeting lobby (host admit) | ✅ | [Group meetings (SFU)](#group-meetings-sfu) |
 | In-meeting chat + emoji | ✅ | [Group meetings (SFU)](#group-meetings-sfu) |
 | Meeting time limit (optional) | ✅ | [Group meetings (SFU)](#group-meetings-sfu) |
+| Media recovery (ICE restart, reconnect) | ✅ | [Group meetings (SFU)](#group-meetings-sfu) |
+| Connection quality + audio-only fallback | ✅ | [Group meetings (SFU)](#group-meetings-sfu) |
+| Chat history across reconnect | ✅ | [Group meetings (SFU)](#group-meetings-sfu) |
 | Virtual backgrounds (client) | ✅ | [Virtual backgrounds](#virtual-backgrounds) |
 | Dev token endpoint | ✅ (dev only) | [Development helpers](#development-helpers) |
 | Recording | ❌ | — |
@@ -699,6 +702,18 @@ client.on((event) => {
   if (event.type === "chat-message") {
     // event.displayName, event.text
   }
+  if (event.type === "chat-history-replay") {
+    // event.messages — full history after reconnect or when calling client.on()
+  }
+  if (event.type === "connection-quality") {
+    // event.level: "good" | "degraded" | "poor"
+  }
+  if (event.type === "audio-only-fallback") {
+    // event.active — video paused due to poor network
+  }
+  if (event.type === "connection-state") {
+    // "connecting" | "connected" | "reconnecting" | "disconnected"
+  }
 });
 
 client.admitParticipant(userId);
@@ -710,7 +725,16 @@ await client.stopScreenShare();
 await client.leave();
 ```
 
-Signaling uses `sfu.*` messages over the same WebSocket (`sfu.getRtpCapabilities`, `sfu.createTransport`, `sfu.produce`, `sfu.consume`, …). Media RTP goes **directly to the VPS** on `MEDIASOUP_PORT` (default **40000** UDP/TCP), not through nginx/Cloudflare.
+Signaling uses `sfu.*` messages over the same WebSocket (`sfu.getRtpCapabilities`, `sfu.createTransport`, `sfu.produce`, `sfu.consume`, `sfu.restartIce`, …). Media RTP goes **directly to the VPS** on `MEDIASOUP_PORT` (default **40000** UDP/TCP), not through nginx/Cloudflare.
+
+#### SFU ICE restart (network recovery)
+
+When a mediasoup transport enters `disconnected` or `failed`, the SDK calls `sfu.restartIce` with the transport id and applies returned `iceParameters` via `transport.restartIce()`. If ICE restart fails repeatedly, the client falls back to signaling reconnect while **reusing** the existing camera/mic stream (no second `getUserMedia` unless tracks ended).
+
+| Message | Purpose |
+|---------|---------|
+| `sfu.restartIce` `{ roomId, requestId, transportId }` | Server calls mediasoup `transport.restartIce()` |
+| `sfu.iceRestarted` `{ requestId, iceParameters }` | Fresh ICE parameters for client transport |
 
 ### Env vars (server)
 
@@ -718,7 +742,7 @@ Signaling uses `sfu.*` messages over the same WebSocket (`sfu.getRtpCapabilities
 |----------|-------------|
 | `MEDIASOUP_ANNOUNCED_IP` | VPS public IP (required in production) |
 | `MEDIASOUP_PORT` | WebRTC listen port (default 40000) |
-| `SFU_MAX_PEERS` | Max participants per meeting (default 6) |
+| `SFU_MAX_PEERS` | Max participants per meeting (default 10) |
 | `MEETING_BASE_URL` | Prefix for `joinUrl` in create response |
 | `GUEST_JWT_TTL_SECONDS` | Guest token lifetime |
 

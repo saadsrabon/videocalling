@@ -32,6 +32,7 @@ EOF
 
 echo "==> Allow app server nginx to reach API port 3004 (adjust APP_SERVER_IP if needed)"
 APP_SERVER_IP="${APP_SERVER_IP:-3.73.242.203}"
+MEDIASOUP_PORT="${MEDIASOUP_PORT:-40000}"
 if command -v ufw >/dev/null 2>&1; then
   ufw allow from "${APP_SERVER_IP}" to any port 3004 proto tcp comment 'simfree admin proxy' || true
   ufw allow "${MEDIASOUP_PORT}:40100/udp" || true

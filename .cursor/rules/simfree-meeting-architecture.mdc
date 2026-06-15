@@ -48,16 +48,24 @@ Admin-only UI (layouts, toasts, sounds, forms) lives under `apps/admin/` and doe
 - SFU: `src/sfu/` (mediasoup; one upstream per peer, N downstream)
 - Expiry / limits: `src/rooms/meeting-expiry.ts`, `expiresAt`, `durationMinutes`
 
-## Deploy split (production)
+## Production servers (SSH)
 
-- **Video API + SFU:** separate VPS (e.g. proxied as `https://admin.simfree.io/video-api`)
-- **Admin + Simfree API:** app server; admin uses `NEXT_PUBLIC_VIDEO_API_URL` / proxy — not localhost videocalling unless dev
+| Server | SSH | Hosts |
+|--------|-----|--------|
+| **App server** | `ssh -i simfree.pem ubuntu@3.73.242.203` | `simfree-monorepo` — **Admin** (`apps/admin`), **Web**, **API** (`simfree-api`), nginx TLS for `admin.simfree.io` |
+| **Video server** | `ssh root@147.79.71.98` | **`videocalling`** at `/var/www/videocalling` — Fastify API `:3004`, signaling WS, mediasoup SFU, coturn (optional) |
 
-When adding meeting features, consider **both** repos and whether docs (`docs/frontend-integration.md`) need updating.
+Do **not** run the videocalling PM2 app on the app server for production — nginx proxies `/video-api/` to **`147.79.71.98:3004`**.
 
 ## Production video server (split deploy)
 
-- Admin/nginx proxies `https://admin.simfree.io/video-api` → video VPS (e.g. `147.79.71.98:3004`).
+- **App server nginx:** `https://admin.simfree.io/video-api` → `http://147.79.71.98:3004` (upstream `simfree_video`).
+- **Admin env:** `NEXT_PUBLIC_VIDEO_API_URL=https://admin.simfree.io/video-api`, `VIDEO_PROXY_URL=http://147.79.71.98:3004` (Next.js rewrites; nginx also proxies `/video-api/`).
+- **504 Gateway Timeout** on `/video-api/*` = app server cannot reach `147.79.71.98:3004` (videocalling down, `HOST=127.0.0.1`, or firewall). Fix on **video server**:
+  ```bash
+  ssh root@147.79.71.98
+  cd /var/www/videocalling && bash deploy/fix-video-server-env.sh
+  ```
 - **Signaling** (HTTPS/WSS) goes through nginx; **SFU media** (UDP/TCP **40000–40100**) goes **direct** to the video server public IP.
-- On the **video VPS** `.env`, `MEDIASOUP_ANNOUNCED_IP` must be that server's **public IP** (not the app server IP). Wrong IP = camera works locally but other participants never receive A/V.
-- Open AWS/security-group ports on the **video** server: `40000–40100` UDP+TCP, plus TURN `3478` if used.
+- On the **video VPS** `.env`, `HOST=0.0.0.0` and `MEDIASOUP_ANNOUNCED_IP=147.79.71.98` (public IP, not app server IP).
+- Open cloud firewall on **147.79.71.98**: TCP **3004** from app server `3.73.242.203`; UDP+TCP **40000–40100** from internet; TURN **3478** if used.

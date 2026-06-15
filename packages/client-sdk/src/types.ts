@@ -145,6 +145,16 @@ export interface MeetingClientJoinOptions {
 
 export type MediaSource = "camera" | "screen";
 
+export type ConnectionQualityLevel = "good" | "degraded" | "poor";
+
+export interface MeetingChatMessage {
+  id: string;
+  from: string;
+  displayName: string;
+  text: string;
+  sentAt: string;
+}
+
 export type MeetingClientEvent =
   | { type: "connected"; userId: string }
   | {
@@ -193,6 +203,19 @@ export type MeetingClientEvent =
       displayName: string;
       text: string;
       sentAt: string;
+    }
+  | { type: "chat-history-replay"; messages: MeetingChatMessage[] }
+  | {
+      type: "connection-quality";
+      level: ConnectionQualityLevel;
+      message?: string;
+      packetLossPercent?: number;
+      rttMs?: number;
+    }
+  | {
+      type: "audio-only-fallback";
+      active: boolean;
+      message?: string;
     }
   | {
       type: "track-added";

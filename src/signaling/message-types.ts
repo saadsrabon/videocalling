@@ -264,6 +264,20 @@ export type ClientMessage =
 
     }
 
+  | {
+
+      type: "sfu.restartIce";
+
+      roomId: string;
+
+      requestId: string;
+
+      transportId: string;
+
+      v?: number;
+
+    }
+
   | { type: "lobby.admit"; roomId: string; userId: string; v?: number }
 
   | { type: "lobby.deny"; roomId: string; userId: string; v?: number }
@@ -521,6 +535,18 @@ export type ServerMessage =
     }
 
   | { type: "sfu.consumerResumed"; requestId: string; v: number }
+
+  | {
+
+      type: "sfu.iceRestarted";
+
+      requestId: string;
+
+      iceParameters: unknown;
+
+      v: number;
+
+    }
 
   | { type: "sfu.producerClosedAck"; requestId: string; v: number }
   | {

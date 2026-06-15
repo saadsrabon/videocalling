@@ -252,6 +252,21 @@ export async function handleSfuMessage(
         break;
       }
 
+      case "sfu.restartIce": {
+        const result = await ctx.sfuService.restartIce(
+          roomId,
+          ctx.user.userId,
+          message.transportId,
+        );
+        sendMessage(ctx.send, {
+          type: "sfu.iceRestarted",
+          requestId,
+          iceParameters: result.iceParameters,
+          v: SIGNALING_VERSION,
+        });
+        break;
+      }
+
       default:
         sendSfuError(ctx, requestId, "unknown_type", "Unsupported SFU message");
     }

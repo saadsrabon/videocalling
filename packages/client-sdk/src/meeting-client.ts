@@ -13,6 +13,8 @@ import type {
   MeetingClientEventHandler,
   MeetingClientJoinOptions,
   MeetingCreateResponse,
+  MeetingChatMessage,
+  ConnectionQualityLevel,
   MeetingJoinResponse,
   MeetingJoinStatus,
   ParticipantInfo,
@@ -95,6 +97,11 @@ type ServerMessage =
       appData?: { source?: string };
     }
   | { type: "sfu.consumerResumed"; requestId: string }
+  | {
+      type: "sfu.iceRestarted";
+      requestId: string;
+      iceParameters: unknown;
+    }
   | {
       type: "sfu.producerList";
       requestId: string;
@@ -304,8 +311,30 @@ async function getUserMediaWithRetry(
     );
   }
 
-  throw lastError instanceof Error
-    ? lastError
+  throw formatDeviceError(lastError);
+}
+
+function formatDeviceError(error: unknown): Error {
+  if (error instanceof DOMException) {
+    if (error.name === "NotReadableError") {
+      return new Error(
+        "Camera or microphone is in use by another app — close other tabs/apps and try again.",
+      );
+    }
+
+    if (error.name === "NotFoundError") {
+      return new Error(
+        "No camera or microphone found — check that a device is connected and allowed in browser settings.",
+      );
+    }
+
+    if (error.name === "NotAllowedError") {
+      return new Error("Camera/microphone permission denied — allow access in browser settings.");
+    }
+  }
+
+  return error instanceof Error
+    ? error
     : new Error("Could not start camera or microphone");
 }
 
@@ -359,6 +388,16 @@ export class MeetingClient {
   private meetingExpiryTimer: ReturnType<typeof setTimeout> | null = null;
   private meetingWarningTimers: ReturnType<typeof setTimeout>[] = [];
   private lobbyPollTimer: ReturnType<typeof setInterval> | null = null;
+  private readonly chatHistory: MeetingChatMessage[] = [];
+  private readonly iceRestartInProgress = new Set<"send" | "recv">();
+  private readonly iceRestartAttempts = new Map<"send" | "recv", number>();
+  private readonly maxIceRestartAttempts = 3;
+  private qualityMonitorTimer: ReturnType<typeof setInterval> | null = null;
+  private lastQualityLevel: ConnectionQualityLevel = "good";
+  private poorQualityStreak = 0;
+  private audioOnlyFallbackActive = false;
+  private readonly localTrackEndedWired = new WeakSet<MediaStreamTrack>();
+  private localTrackRecoveryInProgress = false;
 
   private constructor(options: MeetingClientJoinOptions) {
     this.serverUrl = normalizeServerUrl(options.serverUrl);
@@ -402,6 +441,10 @@ export class MeetingClient {
 
   get localMediaStream(): MediaStream | null {
     return this.localStream;
+  }
+
+  getChatHistory(): readonly MeetingChatMessage[] {
+    return this.chatHistory;
   }
 
   static async createMeeting(
@@ -475,6 +518,9 @@ export class MeetingClient {
 
   on(handler: MeetingClientEventHandler): void {
     this.handlers.add(handler);
+    if (this.chatHistory.length > 0) {
+      handler({ type: "chat-history-replay", messages: [...this.chatHistory] });
+    }
   }
 
   off(handler: MeetingClientEventHandler): void {
@@ -673,6 +719,7 @@ export class MeetingClient {
       });
 
       if (missing.length === 0) {
+        this.emit({ type: "media-ready" });
         return;
       }
 
@@ -701,6 +748,7 @@ export class MeetingClient {
     this.closed = true;
     this.clearMeetingExpiryWatch();
     this.stopLobbyPolling();
+    this.stopQualityMonitor();
 
     for (const meta of this.remoteTracks.values()) {
       meta.consumer.close();
@@ -880,16 +928,18 @@ export class MeetingClient {
           waiting: message.waiting,
         });
         break;
-      case "meeting.chat":
-        this.emit({
-          type: "chat-message",
+      case "meeting.chat": {
+        const chatMessage: MeetingChatMessage = {
           id: message.id,
           from: message.from,
           displayName: message.displayName,
           text: message.text,
           sentAt: message.sentAt,
-        });
+        };
+        this.recordChatMessage(chatMessage);
+        this.emit({ type: "chat-message", ...chatMessage });
         break;
+      }
       case "peer-joined":
         if (message.displayName) {
           this.roster.set(message.userId, {
@@ -930,6 +980,7 @@ export class MeetingClient {
             producerId: message.producerId,
             error: errMsg,
           });
+          this.emit({ type: "error", message: errMsg });
         });
         break;
       case "sfu.producerClosed":
@@ -1020,32 +1071,145 @@ export class MeetingClient {
   }
 
   private async acquireLocalMedia(): Promise<void> {
-    const result = await getUserMediaWithRetry((message, data) =>
-      this.log(message, data),
-    );
+    try {
+      const result = await getUserMediaWithRetry((message, data) =>
+        this.log(message, data),
+      );
 
-    this.localStream = result.stream;
-    this.emit({ type: "local-stream-ready", stream: result.stream });
+      this.localStream = result.stream;
+      this.attachLocalTrackListeners(result.stream);
+      this.emit({ type: "local-stream-ready", stream: result.stream });
 
-    if (!result.hasVideo) {
-      this.cameraOff = true;
-      this.emit({
-        type: "local-media-fallback",
-        hasVideo: false,
-        hasAudio: result.hasAudio,
-        message: result.hasAudio
-          ? "Camera unavailable — joined with microphone only"
-          : "No camera or microphone available",
-      });
-    } else if (!result.hasAudio) {
-      this.micMuted = true;
-      this.emit({
-        type: "local-media-fallback",
-        hasVideo: true,
-        hasAudio: false,
-        message: "Microphone unavailable — joined with camera only",
-      });
+      if (!result.hasVideo) {
+        this.cameraOff = true;
+        this.emit({
+          type: "local-media-fallback",
+          hasVideo: false,
+          hasAudio: result.hasAudio,
+          message: result.hasAudio
+            ? "Camera unavailable — joined with microphone only"
+            : "No camera or microphone available",
+        });
+      } else if (!result.hasAudio) {
+        this.micMuted = true;
+        this.emit({
+          type: "local-media-fallback",
+          hasVideo: true,
+          hasAudio: false,
+          message: "Microphone unavailable — joined with camera only",
+        });
+      }
+    } catch (error) {
+      const message = formatDeviceError(error).message;
+      this.emit({ type: "error", message });
+      throw formatDeviceError(error);
     }
+  }
+
+  private attachLocalTrackListeners(stream: MediaStream): void {
+    for (const track of stream.getTracks()) {
+      this.watchTrack(track, `local-${track.kind}`);
+
+      if (!this.localTrackEndedWired.has(track)) {
+        this.localTrackEndedWired.add(track);
+        track.addEventListener("ended", () => {
+          void this.handleLocalTrackEnded(track.kind);
+        });
+      }
+    }
+  }
+
+  private localMediaNeedsReacquire(): boolean {
+    if (!this.localStream) {
+      return true;
+    }
+
+    return this.localStream
+      .getTracks()
+      .some((track) => track.readyState === "ended");
+  }
+
+  private async ensureLocalMediaAvailable(): Promise<void> {
+    if (this.ghostMode || !this.localMediaNeedsReacquire()) {
+      return;
+    }
+
+    await this.acquireLocalMedia();
+  }
+
+  private async handleLocalTrackEnded(kind: MediaStreamTrack["kind"]): Promise<void> {
+    if (this.closed || this.ghostMode || this.localTrackRecoveryInProgress) {
+      return;
+    }
+
+    this.localTrackRecoveryInProgress = true;
+
+    try {
+      this.log("local track ended — attempting recovery", { kind });
+      await this.reacquireMediaTrack(kind);
+
+      if (kind === "video" && this.sendTransport && !this.cameraOff) {
+        const videoTrack =
+          this.customVideoTrack ?? this.localStream?.getVideoTracks()[0];
+        if (videoTrack) {
+          this.cameraProducer?.close();
+          this.cameraProducer = await this.sendTransport.produce({
+            track: videoTrack,
+            appData: { source: "camera" },
+          });
+          this.watchTrack(videoTrack, "camera-producer");
+        }
+      } else if (kind === "audio" && this.sendTransport && !this.micMuted) {
+        const audioTrack = this.localStream?.getAudioTracks()[0];
+        if (audioTrack) {
+          this.micProducer?.close();
+          this.micProducer = await this.sendTransport.produce({
+            track: audioTrack,
+            appData: { source: "mic" },
+          });
+          this.watchTrack(audioTrack, "mic-producer");
+        }
+      }
+    } catch (error) {
+      const message = formatDeviceError(error).message;
+      this.emit({
+        type: "local-media-fallback",
+        hasVideo: kind === "video" ? false : Boolean(this.localStream?.getVideoTracks().length),
+        hasAudio: kind === "audio" ? false : Boolean(this.localStream?.getAudioTracks().length),
+        message,
+      });
+      this.emit({ type: "error", message });
+    } finally {
+      this.localTrackRecoveryInProgress = false;
+    }
+  }
+
+  private async reacquireMediaTrack(kind: MediaStreamTrack["kind"]): Promise<void> {
+    const constraints: MediaStreamConstraints =
+      kind === "audio" ? { audio: true, video: false } : { audio: false, video: true };
+
+    const stream = await getUserMediaOnce(constraints, 8000);
+    const track =
+      kind === "audio" ? stream.getAudioTracks()[0] : stream.getVideoTracks()[0];
+
+    if (!track) {
+      throw new Error(`Could not re-acquire ${kind} device`);
+    }
+
+    if (!this.localStream) {
+      this.localStream = new MediaStream();
+    }
+
+    for (const existing of this.localStream.getTracks()) {
+      if (existing.kind === kind) {
+        existing.stop();
+        this.localStream.removeTrack(existing);
+      }
+    }
+
+    this.localStream.addTrack(track);
+    this.attachLocalTrackListeners(this.localStream);
+    this.emit({ type: "local-stream-ready", stream: this.localStream });
   }
 
   private watchTransportState(direction: "send" | "recv", transport: Transport): void {
@@ -1053,10 +1217,11 @@ export class MeetingClient {
       this.log(`${direction} transport connection state`, { state });
 
       if (state === "connected") {
+        this.iceRestartAttempts.set(direction, 0);
         return;
       }
 
-      if (state === "failed" || state === "disconnected") {
+      if (state === "disconnected" || state === "failed") {
         const message =
           state === "failed"
             ? `Media connection failed (${direction}). ${MEDIA_PORT_HINT}`
@@ -1069,11 +1234,77 @@ export class MeetingClient {
           message,
         });
 
-        if (state === "failed" && this.mediaSessionReady) {
-          void this.resyncRemoteMedia();
+        if (this.mediaSessionReady) {
+          void this.handleTransportDegraded(direction, transport, state);
         }
       }
     });
+  }
+
+  private async handleTransportDegraded(
+    direction: "send" | "recv",
+    transport: Transport,
+    state: string,
+  ): Promise<void> {
+    const attempts = this.iceRestartAttempts.get(direction) ?? 0;
+
+    if (attempts < this.maxIceRestartAttempts) {
+      const restarted = await this.restartTransportIce(direction, transport);
+      if (restarted) {
+        this.iceRestartAttempts.set(direction, attempts + 1);
+        if (direction === "recv") {
+          await this.resyncRemoteMedia();
+        }
+        return;
+      }
+    }
+
+    if (state === "failed") {
+      this.log("ICE restart exhausted — falling back to signaling reconnect", {
+        direction,
+        attempts,
+      });
+      void this.reconnectSignaling().catch((error) => {
+        this.log("signaling reconnect after transport failure failed", {
+          error: error instanceof Error ? error.message : String(error),
+        });
+      });
+    }
+  }
+
+  private async restartTransportIce(
+    direction: "send" | "recv",
+    transport: Transport,
+  ): Promise<boolean> {
+    if (this.iceRestartInProgress.has(direction)) {
+      return false;
+    }
+
+    this.iceRestartInProgress.add(direction);
+
+    try {
+      this.log("restarting ICE", { direction, transportId: transport.id });
+
+      const response = (await this.request("sfu.restartIce", {
+        roomId: this.roomId,
+        transportId: transport.id,
+      })) as Extract<ServerMessage, { type: "sfu.iceRestarted" }>;
+
+      await transport.restartIce({
+        iceParameters: response.iceParameters as never,
+      });
+
+      this.log("ICE restart completed", { direction });
+      return true;
+    } catch (error) {
+      this.log("ICE restart failed", {
+        direction,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return false;
+    } finally {
+      this.iceRestartInProgress.delete(direction);
+    }
   }
 
   private emitConnectionState(
@@ -1368,15 +1599,33 @@ export class MeetingClient {
       await this.waitForJoined();
     }
 
-    if (!this.ghostMode && !this.localStream) {
-      await this.acquireLocalMedia();
+    if (!this.ghostMode && this.localMediaNeedsReacquire()) {
+      await this.ensureLocalMediaAvailable();
     }
 
     await this.startMediasoupSession();
     this.emitConnectionState("connected");
+    this.replayChatHistory();
+  }
+
+  private replayChatHistory(): void {
+    if (this.chatHistory.length === 0) {
+      return;
+    }
+
+    this.emit({ type: "chat-history-replay", messages: [...this.chatHistory] });
+  }
+
+  private recordChatMessage(message: MeetingChatMessage): void {
+    if (this.chatHistory.some((entry) => entry.id === message.id)) {
+      return;
+    }
+
+    this.chatHistory.push(message);
   }
 
   private teardownMediaSession(): void {
+    this.stopQualityMonitor();
     this.mediaSessionReady = false;
 
     for (const meta of this.remoteTracks.values()) {
@@ -1478,6 +1727,7 @@ export class MeetingClient {
     this.mediaSessionReady = true;
     this.log("mediasoup session ready", { userId: this._userId, roomId: this.roomId });
     this.emit({ type: "media-ready" });
+    this.startQualityMonitor();
     this.scheduleDelayedResync();
   }
 
@@ -1847,6 +2097,148 @@ export class MeetingClient {
       source: resolvedSource,
       track: consumer.track,
       stream,
+    });
+  }
+
+  private startQualityMonitor(): void {
+    this.stopQualityMonitor();
+    this.qualityMonitorTimer = setInterval(() => {
+      void this.evaluateConnectionQuality();
+    }, 5000);
+  }
+
+  private stopQualityMonitor(): void {
+    if (this.qualityMonitorTimer) {
+      clearInterval(this.qualityMonitorTimer);
+      this.qualityMonitorTimer = null;
+    }
+  }
+
+  private async evaluateConnectionQuality(): Promise<void> {
+    if (!this.mediaSessionReady || this.closed) {
+      return;
+    }
+
+    const statsTargets: Array<{ getStats: () => Promise<RTCStatsReport> }> = [];
+
+    if (this.sendTransport) {
+      statsTargets.push(this.sendTransport);
+    }
+
+    if (this.recvTransport) {
+      statsTargets.push(this.recvTransport);
+    }
+
+    for (const producer of [this.micProducer, this.cameraProducer, this.screenProducer]) {
+      if (producer) {
+        statsTargets.push(producer);
+      }
+    }
+
+    for (const meta of this.remoteTracks.values()) {
+      statsTargets.push(meta.consumer);
+    }
+
+    let packetLossPercent = 0;
+    let rttMs = 0;
+    let samples = 0;
+
+    for (const target of statsTargets) {
+      try {
+        const report = await target.getStats();
+
+        report.forEach((stat) => {
+          if (stat.type === "outbound-rtp" || stat.type === "inbound-rtp") {
+            const lost = Number("packetsLost" in stat ? stat.packetsLost : 0);
+            const received = Number("packetsReceived" in stat ? stat.packetsReceived : 0);
+            const total = lost + received;
+
+            if (total > 0) {
+              packetLossPercent += (lost / total) * 100;
+              samples += 1;
+            }
+          }
+
+          if (stat.type === "candidate-pair" && "currentRoundTripTime" in stat) {
+            const rtt = Number(stat.currentRoundTripTime);
+            if (Number.isFinite(rtt) && rtt > 0) {
+              rttMs = Math.max(rttMs, rtt * 1000);
+            }
+          }
+        });
+      } catch {
+        /* stats may fail during teardown */
+      }
+    }
+
+    const avgPacketLoss = samples > 0 ? packetLossPercent / samples : 0;
+    let level: ConnectionQualityLevel = "good";
+
+    if (avgPacketLoss > 8 || rttMs > 600) {
+      level = "poor";
+    } else if (avgPacketLoss > 3 || rttMs > 300) {
+      level = "degraded";
+    }
+
+    if (level !== this.lastQualityLevel) {
+      this.lastQualityLevel = level;
+      const message =
+        level === "good"
+          ? "Connection quality restored"
+          : level === "degraded"
+            ? "Connection quality is degraded"
+            : "Connection quality is poor — switching to audio-only if it persists";
+
+      this.emit({
+        type: "connection-quality",
+        level,
+        message,
+        packetLossPercent: avgPacketLoss,
+        rttMs,
+      });
+    }
+
+    if (level === "poor") {
+      this.poorQualityStreak += 1;
+    } else {
+      this.poorQualityStreak = 0;
+    }
+
+    if (this.poorQualityStreak >= 3 && !this.audioOnlyFallbackActive) {
+      await this.applyAudioOnlyFallback(true);
+    } else if (
+      this.audioOnlyFallbackActive &&
+      level === "good" &&
+      this.poorQualityStreak === 0
+    ) {
+      await this.applyAudioOnlyFallback(false);
+    }
+  }
+
+  private async applyAudioOnlyFallback(active: boolean): Promise<void> {
+    if (this.ghostMode || this.cameraOff) {
+      return;
+    }
+
+    this.audioOnlyFallbackActive = active;
+
+    if (active) {
+      this.setCameraOff(true);
+      this.cameraProducer?.pause();
+      this.emit({
+        type: "audio-only-fallback",
+        active: true,
+        message: "Video paused due to poor connection — audio continues",
+      });
+      return;
+    }
+
+    this.setCameraOff(false);
+    this.cameraProducer?.resume();
+    this.emit({
+      type: "audio-only-fallback",
+      active: false,
+      message: "Video resumed — connection quality improved",
     });
   }
 }

@@ -68,6 +68,7 @@ src/
 | 6 — Browser SDK | ✅ Complete |
 | 7 — SFU meetings | ✅ Complete |
 | 8 — Meeting UX | ✅ Complete |
+| 9 — Reliability & recovery | ✅ Complete |
 
 **Frontend docs:** [`docs/frontend-integration.md`](docs/frontend-integration.md) — update when adding user-facing API/SDK features.
 
@@ -545,6 +546,58 @@ src/
 
 ---
 
+## Phase 9 — Reliability & recovery
+
+### Step 9.1 — Server ICE restart ✅
+
+**Files:** `src/sfu/sfu-service.ts`, `src/signaling/handlers/sfu.ts`, `src/signaling/message-types.ts`
+
+**Why:** mediasoup transports that enter `disconnected`/`failed` need fresh ICE parameters without tearing down producers/consumers.
+
+**Verify:** `npm run typecheck` · client calls `sfu.restartIce` on transport degradation.
+
+---
+
+### Step 9.2 — Client media auto-recovery ✅
+
+**Files:** `packages/client-sdk/src/meeting-client.ts`
+
+**Why:** Resume media after network blips without rejoining or re-acquiring camera (avoids "camera in use" errors).
+
+**Verify:** Drop Wi-Fi briefly on one peer → A/V resumes; `localStream` reused on reconnect.
+
+---
+
+### Step 9.3 — Device resilience ✅
+
+**Files:** `packages/client-sdk/src/meeting-client.ts`
+
+**Why:** Recover from unplugged/seized devices with actionable errors (`NotReadableError`, `NotFoundError`).
+
+**Verify:** End local video track in devtools → client attempts single re-acquire.
+
+---
+
+### Step 9.4 — Chat history across reconnect ✅
+
+**Files:** `packages/client-sdk/src/meeting-client.ts`, `packages/client-sdk/src/types.ts`, admin `MeetingRoom.tsx`
+
+**Why:** Chat panel should not wipe on signaling reconnect.
+
+**Verify:** Send chat → force reconnect → messages replay via `chat-history-replay`.
+
+---
+
+### Step 9.5 — Quality monitoring + audio-only fallback ✅
+
+**Files:** `packages/client-sdk/src/meeting-client.ts`, admin `MeetingRoom.tsx`
+
+**Why:** Notify users of degraded quality; pause video automatically when connection is poor.
+
+**Verify:** `connection-quality` events fire; sustained poor quality triggers `audio-only-fallback`.
+
+---
+
 ## Environment variables (living list)
 
 | Variable | Phase | Description |
@@ -577,6 +630,8 @@ npm run typecheck  # TypeScript without emit
 
 ## Next step
 
-Phases 0–8 complete. Deploy videocalling + admin with lobby, chat, and grid UX. See `docs/deployment-split-servers.md` for split-server setup.
+Phases 0–9 complete. Deploy videocalling + admin with lobby, chat, grid UX, and media recovery. See `docs/deployment-split-servers.md` for split-server setup.
+
+Future phases (schedule separately): calendar invites, pre-join device check, recording, live captions, breakout rooms, post-meeting summary.
 
 See `docs/coturn-vps.md` to finish TURN on your VPS.

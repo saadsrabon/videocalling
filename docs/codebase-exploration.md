@@ -2,7 +2,7 @@
 
 > Learn this project by reading files in a deliberate order — from bootstrap to WebRTC demo.
 >
-> **Last updated:** 2026-06-10
+> **Last updated:** 2026-06-15
 
 ---
 
@@ -382,8 +382,8 @@ Quick lookup table when you know *what* you want but not *where* it is.
 3. Client `POST /v1/meetings/:code/join` (staff) or `guest-join` (guest) → HTTP join returns `status: admitted | waiting` + roster.
 4. WS `join { roomId }` → [`handlers/join.ts`](../src/signaling/handlers/join.ts) — waiting users get `lobby.waiting`; admitted users enter SFU via `sfuService.joinPeer`.
 5. Host `lobby.admit` → [`handlers/lobby.ts`](../src/signaling/handlers/lobby.ts) → waiter gets `lobby.admitted` then starts mediasoup.
-6. Client sends `sfu.getRtpCapabilities` → `sfu.createTransport` (send + recv) → `sfu.produce` / `sfu.consume`.
-7. Chat: `meeting.chat.send` → [`handlers/meeting-chat.ts`](../src/signaling/handlers/meeting-chat.ts) → broadcast `meeting.chat`.
+6. Client sends `sfu.getRtpCapabilities` → `sfu.createTransport` (send + recv) → `sfu.produce` / `sfu.consume`. On transport `disconnected`/`failed`, client calls `sfu.restartIce` before full reconnect.
+7. Chat: `meeting.chat.send` → [`handlers/meeting-chat.ts`](../src/signaling/handlers/meeting-chat.ts) → broadcast `meeting.chat`. Client keeps in-memory history and replays on reconnect.
 8. Expiry: [`src/rooms/meeting-expiry.ts`](../src/rooms/meeting-expiry.ts) polls every 15s → `meeting.ended` + `SfuService.closeRoom` + room delete.
 8. RTP flows UDP/TCP to mediasoup on `MEDIASOUP_PORT` (not through nginx).
 9. On disconnect → `handlePeerDisconnect` → `sfuService.removePeer` → `sfu.peerLeft` broadcast.
