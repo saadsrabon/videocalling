@@ -1432,11 +1432,11 @@ export class MeetingClient {
       this.startLobbyPolling();
     }
 
-    this.log(this.ghostMode ? "ghost observer joining (no publish)" : "acquiring camera/mic after admission");
-
-    if (!this.ghostMode) {
-      await this.acquireLocalMedia();
-    }
+    this.log(
+      this.ghostMode
+        ? "ghost observer — receive-only mediasoup"
+        : "starting mediasoup (remote media first, then camera/mic)",
+    );
 
     const iceResponse = await fetch(`${baseUrl}/v1/ice-servers`, { headers });
     if (!iceResponse.ok) {
@@ -1722,15 +1722,10 @@ export class MeetingClient {
       routerRtpCapabilities: capsMessage.rtpCapabilities as never,
     });
 
-    if (this.ghostMode) {
-      await this.createRecvTransport();
-      await this.waitForRecvTransportConnected();
-    } else {
-      await this.createSendTransport();
-      await this.createRecvTransport();
-      await this.waitForRecvTransportConnected();
-      await this.startLocalMedia();
-    }
+    await this.createRecvTransport();
+    await this.waitForRecvTransportConnected();
+
+    this.mediaSessionReady = true;
 
     const existingProducers = await this.listExistingProducers();
     this.log("existing producers in room", {
@@ -1748,9 +1743,22 @@ export class MeetingClient {
     }
 
     await this.flushPendingConsumes();
-    this.mediaSessionReady = true;
-    this.log("mediasoup session ready", { userId: this._userId, roomId: this.roomId });
     this.emit({ type: "media-ready" });
+
+    if (!this.ghostMode) {
+      if (!this.localStream) {
+        this.log("acquiring camera/mic for publish");
+        await this.acquireLocalMedia();
+      }
+
+      if (!this.sendTransport) {
+        await this.createSendTransport();
+      }
+
+      await this.startLocalMedia();
+    }
+
+    this.log("mediasoup session ready", { userId: this._userId, roomId: this.roomId });
     this.startQualityMonitor();
     this.scheduleDelayedResync();
 

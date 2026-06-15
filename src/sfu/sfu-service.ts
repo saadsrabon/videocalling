@@ -172,7 +172,7 @@ export class SfuService {
 
   listProducers(roomId: string, excludePeerId?: string): ProducerInfo[] {
     const room = this.getRoom(roomId);
-    const producers: ProducerInfo[] = [];
+    const latestByKey = new Map<string, ProducerInfo>();
 
     for (const [peerId, peer] of room.peers) {
       if (excludePeerId && peerId === excludePeerId) {
@@ -181,7 +181,9 @@ export class SfuService {
 
       for (const producer of peer.producers.values()) {
         const appData = producer.appData as { source?: string };
-        producers.push({
+        const sourceKey = appData.source ?? (producer.kind === "audio" ? "mic" : "camera");
+        const key = `${peerId}:${producer.kind}:${sourceKey}`;
+        latestByKey.set(key, {
           producerId: producer.id,
           peerId,
           kind: producer.kind,
@@ -190,7 +192,7 @@ export class SfuService {
       }
     }
 
-    return producers;
+    return [...latestByKey.values()];
   }
 
   async createWebRtcTransport(
